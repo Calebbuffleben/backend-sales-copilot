@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { join } from 'path';
@@ -30,21 +30,16 @@ interface GrpcStream {
 
 @Injectable()
 export class GrpcAudioClient implements OnModuleDestroy {
-  private readonly logger: any = {
-    log: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-    verbose: () => {},
-  };
+  private readonly logger = new Logger(GrpcAudioClient.name);
   private client: any;
   private streams = new Map<string, GrpcStream>();
   private readonly serviceUrl: string;
+  private readonly serviceUsesTls: boolean;
   private readonly enabled: boolean;
   private readonly streamTimeoutMs: number;
 
   constructor() {
-    const defaultGrpcAudioUrl = 'https://text-analysis-production.up.railway.app:50051';
+    const defaultGrpcAudioUrl = 'https://text-analysis-production.up.railway.app';
     this.serviceUrl = process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
     this.enabled =
       (process.env.GRPC_AUDIO_SERVICE_ENABLED || 'true') === 'true';
@@ -59,6 +54,27 @@ export class GrpcAudioClient implements OnModuleDestroy {
     } else {
       this.logger.warn('gRPC audio service is disabled');
     }
+  }
+
+  private normalizeGrpcTarget(rawValue: string): {
+    target: string;
+    useTls: boolean;
+  } {
+    const value = String(rawValue || '').trim();
+    if (!value) {
+      return { target: 'localhost:50051', useTls: false };
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      const url = new URL(value);
+      const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+      return {
+        target: `${url.hostname}:${port}`,
+        useTls: url.protocol === 'https:',
+      };
+    }
+
+    return { target: value, useTls: false };
   }
 
   private initializeClient() {
@@ -76,13 +92,18 @@ export class GrpcAudioClient implements OnModuleDestroy {
       const audioPipelineProto = grpc.loadPackageDefinition(
         packageDefinition,
       ) as any;
+      const credentials = this.serviceUsesTls
+        ? grpc.credentials.createSsl()
+        : grpc.credentials.createInsecure();
 
       this.client = new audioPipelineProto.audio_pipeline.AudioPipelineService(
         this.serviceUrl,
-        grpc.credentials.createInsecure(),
+        credentials,
       );
 
-      this.logger.log(`gRPC client initialized for ${this.serviceUrl}`);
+      this.logger.log(
+        `gRPC client initialized for ${this.serviceUrl} (tls=${this.serviceUsesTls})`,
+      );
     } catch (error) {
       this.logger.error(
         `Failed to initialize gRPC client: ${error instanceof Error ? error.message : String(error)}`,

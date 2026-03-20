@@ -35,7 +35,7 @@ NODE_ENV=development
 
 # Text Analysis Service
 # Como o backend não está em Docker, usa localhost com a porta mapeada
-TEXT_ANALYSIS_SERVICE_URL=https://text-analysis-production.up.railway.app:50051
+TEXT_ANALYSIS_SERVICE_URL=https://text-analysis-production.up.railway.app
 TEXT_ANALYSIS_ENABLED=true
 TEXT_ANALYSIS_TIMEOUT_MS=5000
 
@@ -45,7 +45,7 @@ AUDIO_TRANSCRIPTION_ENABLED=true
 
 # gRPC Audio Pipeline Service
 # URL do serviço gRPC externo que recebe os dados de áudio
-GRPC_AUDIO_SERVICE_URL=https://text-analysis-production.up.railway.app:50051
+GRPC_AUDIO_SERVICE_URL=text-analysis-production.up.railway.app:443
 # Habilitar/desabilitar envio via gRPC (true|false)
 GRPC_AUDIO_SERVICE_ENABLED=true
 # Timeout em ms para fechar streams inativos
