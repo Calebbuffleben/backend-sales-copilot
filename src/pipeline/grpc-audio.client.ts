@@ -56,27 +56,6 @@ export class GrpcAudioClient implements OnModuleDestroy {
     }
   }
 
-  private normalizeGrpcTarget(rawValue: string): {
-    target: string;
-    useTls: boolean;
-  } {
-    const value = String(rawValue || '').trim();
-    if (!value) {
-      return { target: 'localhost:50051', useTls: false };
-    }
-
-    if (/^https?:\/\//i.test(value)) {
-      const url = new URL(value);
-      const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-      return {
-        target: `${url.hostname}:${port}`,
-        useTls: url.protocol === 'https:',
-      };
-    }
-
-    return { target: value, useTls: false };
-  }
-
   private initializeClient() {
     try {
       // Caminho relativo ao diretório raiz do projeto (funciona em dev e prod após build)
@@ -92,18 +71,13 @@ export class GrpcAudioClient implements OnModuleDestroy {
       const audioPipelineProto = grpc.loadPackageDefinition(
         packageDefinition,
       ) as any;
-      const credentials = this.serviceUsesTls
-        ? grpc.credentials.createSsl()
-        : grpc.credentials.createInsecure();
 
       this.client = new audioPipelineProto.audio_pipeline.AudioPipelineService(
         this.serviceUrl,
-        credentials,
+        grpc.credentials.createInsecure(),
       );
 
-      this.logger.log(
-        `gRPC client initialized for ${this.serviceUrl} (tls=${this.serviceUsesTls})`,
-      );
+      this.logger.log(`gRPC client initialized for ${this.serviceUrl}`);
     } catch (error) {
       this.logger.error(
         `Failed to initialize gRPC client: ${error instanceof Error ? error.message : String(error)}`,
