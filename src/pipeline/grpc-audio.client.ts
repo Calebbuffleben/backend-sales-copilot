@@ -39,7 +39,7 @@ export class GrpcAudioClient implements OnModuleDestroy {
   private readonly streamTimeoutMs: number;
 
   constructor() {
-    const defaultGrpcAudioUrl = 'https://text-analysis-production.up.railway.app';
+    const defaultGrpcAudioUrl = 'text-analysis-production.up.railway.app:443';
     this.serviceUrl = process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
     this.enabled =
       (process.env.GRPC_AUDIO_SERVICE_ENABLED || 'true') === 'true';
