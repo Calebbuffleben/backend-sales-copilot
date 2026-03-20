@@ -58,6 +58,9 @@ RUN pnpm prisma:generate
 # Copy built application
 COPY --from=base /app/dist ./dist
 
+# Copy runtime proto contracts loaded by dist/main.js
+COPY --from=base /app/proto ./proto
+
 # Create storage directories
 RUN mkdir -p storage/egress/audio storage/egress/video storage/pipeline-logs
 
