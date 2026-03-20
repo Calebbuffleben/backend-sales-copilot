@@ -39,8 +39,11 @@ export class GrpcAudioClient implements OnModuleDestroy {
   private readonly streamTimeoutMs: number;
 
   constructor() {
+    // Python listens on plain gRPC (insecure) at GRPC_PORT (50051). On Railway,
+    // use private DNS between services: <service>.railway.internal:50051 — not the
+    // public *.up.railway.app:443 edge (HTTPS), which does not terminate to that gRPC.
     const defaultGrpcAudioUrl = process.env.RAILWAY_SERVICE_NAME
-      ? 'text-analysis-production.up.railway.app:443'
+      ? 'text-analysis-production.railway.internal:50051'
       : 'localhost:50051';
     const configuredServiceUrl =
       process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
@@ -66,6 +69,7 @@ export class GrpcAudioClient implements OnModuleDestroy {
     target: string;
     useTls: boolean;
   } {
+    const tlsOverride = process.env.GRPC_AUDIO_USE_TLS;
     const value = String(rawTarget || '').trim();
     if (!value) {
       return { target: 'localhost:50051', useTls: false };
@@ -80,10 +84,28 @@ export class GrpcAudioClient implements OnModuleDestroy {
       };
     }
 
-    return {
-      target: value,
-      useTls: false,
-    };
+    // host:port — infer TLS for public HTTPS edges; plain gRPC for :50051 / private mesh
+    const lastColon = value.lastIndexOf(':');
+    const maybeHost =
+      lastColon > 0 ? value.slice(0, lastColon) : value;
+    const maybePort = lastColon > 0 ? value.slice(lastColon + 1) : '';
+    const isPrivateRailway = /\.railway\.internal$/i.test(maybeHost);
+    if (isPrivateRailway) {
+      return { target: value, useTls: false };
+    }
+
+    if (tlsOverride === 'true') {
+      return { target: value, useTls: true };
+    }
+    if (tlsOverride === 'false') {
+      return { target: value, useTls: false };
+    }
+
+    const portNum = maybePort ? parseInt(maybePort, 10) : NaN;
+    if (portNum === 443) {
+      return { target: value, useTls: true };
+    }
+    return { target: value, useTls: false };
   }
 
   private initializeClient() {

@@ -44,8 +44,12 @@ TEXT_ANALYSIS_TIMEOUT_MS=5000
 AUDIO_TRANSCRIPTION_ENABLED=true
 
 # gRPC Audio Pipeline Service
-# URL do serviço gRPC externo que recebe os dados de áudio
-GRPC_AUDIO_SERVICE_URL=text-analysis-production.up.railway.app:443
+# URL do serviço gRPC (plain gRPC na porta do Python, ex.: 50051).
+# No Railway, use rede privada entre serviços — não use *.up.railway.app:443 para gRPC.
+# Ex.: text-analysis-production.railway.internal:50051 (ajuste ao nome do serviço no dashboard)
+GRPC_AUDIO_SERVICE_URL=text-analysis-production.railway.internal:50051
+# Opcional: force TLS (só se o servidor gRPC usar TLS). Python atual = insecure.
+# GRPC_AUDIO_USE_TLS=false
 # Habilitar/desabilitar envio via gRPC (true|false)
 GRPC_AUDIO_SERVICE_ENABLED=true
 # Timeout em ms para fechar streams inativos

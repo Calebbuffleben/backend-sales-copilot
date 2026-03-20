@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { GrpcAudioClient } from './grpc-audio.client';
 import { convertPcmToWav } from './audio-utils';
 
@@ -24,13 +24,7 @@ type BufferState = {
 export class PipelineService {
   private keyToState = new Map<string, BufferState>();
   private readonly defaultGroupSeconds: number;
-  private readonly logger: any = {
-    log: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-    verbose: () => {},
-  };
+  private readonly logger = new Logger(PipelineService.name);
 
   constructor(private readonly grpcClient: GrpcAudioClient) {
     const seconds = Number(process.env.AUDIO_PIPELINE_GROUP_SECONDS || '2');
