@@ -39,8 +39,14 @@ export class GrpcAudioClient implements OnModuleDestroy {
   private readonly streamTimeoutMs: number;
 
   constructor() {
-    const defaultGrpcAudioUrl = 'text-analysis-production.up.railway.app:443';
-    this.serviceUrl = process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
+    const defaultGrpcAudioUrl = process.env.RAILWAY_SERVICE_NAME
+      ? 'text-analysis-production.up.railway.app:443'
+      : 'localhost:50051';
+    const configuredServiceUrl =
+      process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
+    const normalizedTarget = this.normalizeGrpcTarget(configuredServiceUrl);
+    this.serviceUrl = normalizedTarget.target;
+    this.serviceUsesTls = normalizedTarget.useTls;
     this.enabled =
       (process.env.GRPC_AUDIO_SERVICE_ENABLED || 'true') === 'true';
     this.streamTimeoutMs = parseInt(
@@ -54,6 +60,30 @@ export class GrpcAudioClient implements OnModuleDestroy {
     } else {
       this.logger.warn('gRPC audio service is disabled');
     }
+  }
+
+  private normalizeGrpcTarget(rawTarget: string): {
+    target: string;
+    useTls: boolean;
+  } {
+    const value = String(rawTarget || '').trim();
+    if (!value) {
+      return { target: 'localhost:50051', useTls: false };
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      const parsed = new URL(value);
+      const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+      return {
+        target: `${parsed.hostname}:${port}`,
+        useTls: parsed.protocol === 'https:',
+      };
+    }
+
+    return {
+      target: value,
+      useTls: false,
+    };
   }
 
   private initializeClient() {
@@ -71,13 +101,18 @@ export class GrpcAudioClient implements OnModuleDestroy {
       const audioPipelineProto = grpc.loadPackageDefinition(
         packageDefinition,
       ) as any;
+      const credentials = this.serviceUsesTls
+        ? grpc.credentials.createSsl()
+        : grpc.credentials.createInsecure();
 
       this.client = new audioPipelineProto.audio_pipeline.AudioPipelineService(
         this.serviceUrl,
-        grpc.credentials.createInsecure(),
+        credentials,
       );
 
-      this.logger.log(`gRPC client initialized for ${this.serviceUrl}`);
+      this.logger.log(
+        `gRPC client initialized for ${this.serviceUrl} (tls=${this.serviceUsesTls})`,
+      );
     } catch (error) {
       this.logger.error(
         `Failed to initialize gRPC client: ${error instanceof Error ? error.message : String(error)}`,
