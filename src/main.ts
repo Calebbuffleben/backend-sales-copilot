@@ -70,7 +70,6 @@ async function bootstrap() {
           rejectPromise(error);
           return;
         }
-        grpcServer.start();
         resolvePromise();
       },
     );
