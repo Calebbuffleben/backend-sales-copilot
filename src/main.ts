@@ -74,5 +74,19 @@ async function bootstrap() {
       },
     );
   });
+
+  // Always visible in Railway (Prisma queries alone do not prove audio/gRPC path is active)
+  // eslint-disable-next-line no-console
+  console.log(
+    '[bootstrap] ready | PORT=%s | GRPC_FEEDBACK_INGRESS=0.0.0.0:%s | GRPC_AUDIO_SERVICE_URL=%s | GRPC_AUDIO_USE_TLS=%s',
+    port,
+    feedbackGrpcPort,
+    process.env.GRPC_AUDIO_SERVICE_URL || '(default from GrpcAudioClient)',
+    process.env.GRPC_AUDIO_USE_TLS ?? '(infer)',
+  );
 }
-bootstrap();
+bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error('[bootstrap] fatal', err);
+  process.exit(1);
+});
