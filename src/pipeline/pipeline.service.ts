@@ -84,7 +84,7 @@ export class PipelineService {
     );
   }
 
-  //Transforma o boffer acumulado em um buffer de payload
+  // Transforma o buffer acumulado em um buffer de payload
   private flush(meta: AudioChunkMeta, key: string, state: BufferState): void {
     if (state.bytesAccumulated === 0) {
       return;
@@ -139,7 +139,11 @@ export class PipelineService {
 
       const t4_sent = Date.now();
 
-      // Log de latência
+      this.logger.log(
+        `Pipeline → gRPC | ${key} | seq=${seq} | pcmBytes=${pcm.length} | wavBytes=${wavBuffer.length}`,
+      );
+
+      // Latência detalhada (habilitar LOG_LEVEL=debug para ver no deploy)
       this.logger.debug(`[LATENCY] Audio pipeline timing`, {
         meetingId: meta.meetingId,
         participantId: meta.participant,

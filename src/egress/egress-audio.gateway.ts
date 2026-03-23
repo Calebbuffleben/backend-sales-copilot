@@ -20,6 +20,8 @@ interface EgressConnection {
   chunksReceived: number;
   connectedAt: Date;
   lastChunkAt: Date;
+  /** Throttle INFO logs for ingress progress (not only first chunk). */
+  lastIngressLogAt: number;
 }
 
 @Injectable()
@@ -96,9 +98,14 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       chunksReceived: 0,
       connectedAt: new Date(),
       lastChunkAt: new Date(),
+      lastIngressLogAt: 0,
     };
 
     this.connections.set(ws, connection);
+
+    this.logger.log(
+      `WS /egress-audio connected | meetingId=${meetingId} | participant=${participant} | track=${track} | ${sampleRate}Hz/${channels}ch`,
+    );
 
     // Handle binary audio data
     ws.on('message', (data: WebSocket.Data) => {
@@ -120,7 +127,9 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       const conn = this.connections.get(ws);
       if (conn) {
         const duration = Date.now() - conn.connectedAt.getTime();
-
+        this.logger.log(
+          `WS /egress-audio closed | meetingId=${conn.meetingId} | chunks=${conn.chunksReceived} | bytes=${conn.bytesReceived} | durationMs=${duration} | code=${code}`,
+        );
         this.connections.delete(ws);
       }
     });
@@ -137,6 +146,23 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     connection.bytesReceived += chunkSize;
     connection.chunksReceived += 1;
     connection.lastChunkAt = now;
+
+    const { meetingId, participant } = connection;
+    if (connection.chunksReceived === 1) {
+      this.logger.log(
+        `First audio chunk | meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize}`,
+      );
+      connection.lastIngressLogAt = now.getTime();
+    } else {
+      const periodMs = 5_000;
+      const t = now.getTime();
+      if (t - connection.lastIngressLogAt >= periodMs) {
+        connection.lastIngressLogAt = t;
+        this.logger.log(
+          `Audio ingress | meetingId=${meetingId} | chunks=${connection.chunksReceived} | bytes=${connection.bytesReceived} | lastChunk=${chunkSize}b`,
+        );
+      }
+    }
 
     // Enviar para o pipeline de processamento de áudio
     const meta: AudioChunkMeta = {
