@@ -149,8 +149,10 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
 
     const { meetingId, participant } = connection;
     if (connection.chunksReceived === 1) {
+      const bytesPerSec =
+        connection.sampleRate * connection.channels * 2; // s16le
       this.logger.log(
-        `First audio chunk | meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize}`,
+        `First audio chunk | meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize} | sampleRate=${connection.sampleRate} | channels=${connection.channels} | s16leBytesPerSec=${bytesPerSec}`,
       );
       connection.lastIngressLogAt = now.getTime();
     } else {

@@ -56,7 +56,7 @@ AUDIO_TRANSCRIPTION_ENABLED=true
 #   4) No Railway: Variables → "Reference" → Private URL do serviço Python (se disponível).
 #
 # Exemplo (substitua pelo nome real do seu serviço Python):
-GRPC_AUDIO_SERVICE_URL=text-analysis-production.railway.internal:50051
+GRPC_AUDIO_SERVICE_URL=text-analysis-production.railway.app:50051
 # Opcional: force TLS (só se o servidor gRPC usar TLS). Python atual = insecure.
 # GRPC_AUDIO_USE_TLS=false
 # Habilitar/desabilitar envio via gRPC (true|false)
