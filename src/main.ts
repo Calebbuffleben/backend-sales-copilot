@@ -14,7 +14,11 @@ if (!process.env.DATABASE_URL) {
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { logger: false });
+  // logger: false silencia TODO o Nest Logger (incl. EgressAudioGateway / PipelineService).
+  // Prisma e console.log continuam — por isso só aparecia prisma:query + [bootstrap].
+  const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'warn', 'log'],
+  });
 
   // Configure CORS for Chrome extension
   app.enableCors({
