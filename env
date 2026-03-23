@@ -45,8 +45,17 @@ AUDIO_TRANSCRIPTION_ENABLED=true
 
 # gRPC Audio Pipeline Service
 # URL do serviço gRPC (plain gRPC na porta do Python, ex.: 50051).
-# No Railway, use rede privada entre serviços — não use *.up.railway.app:443 para gRPC.
-# Ex.: text-analysis-production.railway.internal:50051 (ajuste ao nome do serviço no dashboard)
+# No Railway, use rede privada entre serviços — não use *.up.railway.app:443 para gRPC plain.
+#
+# Se o log mostrar: "Name resolution failed for ... railway.internal"
+#   1) Backend e serviço Python devem estar no MESMO projeto Railway.
+#   2) Private Networking ativo (ambos os serviços / projeto).
+#   3) O host ANTES de .railway.internal é o NOME DO SERVIÇO no painel (aba do serviço Python),
+#      não o slug da URL pública. Ex.: se o serviço se chama "text-analysis", use
+#      text-analysis.railway.internal:50051 — não copie "text-analysis-production" da URL pública.
+#   4) No Railway: Variables → "Reference" → Private URL do serviço Python (se disponível).
+#
+# Exemplo (substitua pelo nome real do seu serviço Python):
 GRPC_AUDIO_SERVICE_URL=text-analysis-production.railway.internal:50051
 # Opcional: force TLS (só se o servidor gRPC usar TLS). Python atual = insecure.
 # GRPC_AUDIO_USE_TLS=false

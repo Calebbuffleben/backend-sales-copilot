@@ -6,6 +6,26 @@ import * as dotenv from 'dotenv';
 import { join, resolve } from 'path';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import dns from 'dns/promises';
+
+function parseGrpcAudioHostname(): string | null {
+  const raw = process.env.GRPC_AUDIO_SERVICE_URL?.trim();
+  if (!raw) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      return new URL(raw).hostname;
+    } catch {
+      return null;
+    }
+  }
+  const lastColon = raw.lastIndexOf(':');
+  if (lastColon > 0) {
+    return raw.slice(0, lastColon);
+  }
+  return raw;
+}
 
 // Load environment variables from .env file (fallback to env file if .env doesn't exist)
 dotenv.config({ path: resolve(process.cwd(), '.env') });
@@ -88,6 +108,24 @@ async function bootstrap() {
     process.env.GRPC_AUDIO_SERVICE_URL || '(default from GrpcAudioClient)',
     process.env.GRPC_AUDIO_USE_TLS ?? '(infer)',
   );
+
+  const grpcHost = parseGrpcAudioHostname();
+  if (grpcHost && /\.railway\.internal$/i.test(grpcHost)) {
+    try {
+      const { address } = await dns.lookup(grpcHost);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[bootstrap] GRPC_AUDIO DNS OK | ${grpcHost} → ${address}`,
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // eslint-disable-next-line no-console
+      console.error(
+        `[bootstrap] GRPC_AUDIO DNS FAILED | host=${grpcHost} | ${msg}`,
+        '\n[bootstrap] Fix: backend + Python no MESMO projeto Railway; Private Networking ligado; GRPC_AUDIO_SERVICE_URL = nome exato do serviço Python no painel + .railway.internal:50051 (não use o domínio público *.up.railway.app como host interno).',
+      );
+    }
+  }
 }
 bootstrap().catch((err) => {
   // eslint-disable-next-line no-console

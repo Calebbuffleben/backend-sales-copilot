@@ -40,13 +40,18 @@ export class GrpcAudioClient implements OnModuleDestroy {
 
   constructor() {
     // Python listens on plain gRPC (insecure) at GRPC_PORT (50051). On Railway,
-    // use private DNS between services: <service>.railway.internal:50051 — not the
-    // public *.up.railway.app:443 edge (HTTPS), which does not terminate to that gRPC.
-    const defaultGrpcAudioUrl = process.env.RAILWAY_SERVICE_NAME
-      ? 'text-analysis-production.railway.internal:50051'
-      : 'localhost:50051';
+    // set GRPC_AUDIO_SERVICE_URL to <exact-service-name>.railway.internal:50051
+    // (same project + Private Networking). Do not guess the service name here.
     const configuredServiceUrl =
-      process.env.GRPC_AUDIO_SERVICE_URL || defaultGrpcAudioUrl;
+      process.env.GRPC_AUDIO_SERVICE_URL || 'localhost:50051';
+    if (
+      !process.env.GRPC_AUDIO_SERVICE_URL &&
+      (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_NAME)
+    ) {
+      this.logger.warn(
+        'GRPC_AUDIO_SERVICE_URL is unset — using localhost:50051. On Railway, set it to your Python service private host: <name-from-dashboard>.railway.internal:50051',
+      );
+    }
     const normalizedTarget = this.normalizeGrpcTarget(configuredServiceUrl);
     this.serviceUrl = normalizedTarget.target;
     this.serviceUsesTls = normalizedTarget.useTls;
