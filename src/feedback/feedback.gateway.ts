@@ -11,8 +11,9 @@ import {
 import { Server, Socket } from 'socket.io';
 
 @WebSocketGateway({
+  // origin: '*' with credentials: true is invalid for browsers; use reflected origin (same as main.ts enableCors).
   cors: {
-    origin: '*',
+    origin: true,
     credentials: true,
   },
   transports: ['websocket'],
