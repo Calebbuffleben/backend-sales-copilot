@@ -75,6 +75,7 @@ export class FeedbackService {
       type: feedback.type,
       severity: feedback.severity,
       ts: feedback.ts.toISOString(),
+      createdAt: feedback.createdAt.toISOString(),
       windowStart: feedback.windowStart.toISOString(),
       windowEnd: feedback.windowEnd.toISOString(),
       message: feedback.message,
@@ -127,6 +128,7 @@ export class FeedbackService {
               type: true;
               severity: true;
               ts: true;
+              createdAt: true;
               message: true;
               metadata: true;
             };
@@ -136,6 +138,7 @@ export class FeedbackService {
               type: FeedbackType;
               severity: FeedbackSeverity;
               ts: Date;
+              createdAt: Date;
               message: string;
               metadata: Prisma.JsonValue;
             }>
@@ -151,6 +154,7 @@ export class FeedbackService {
         type: true,
         severity: true,
         ts: true,
+        createdAt: true,
         message: true,
         metadata: true,
       },
@@ -161,6 +165,7 @@ export class FeedbackService {
       type: r.type,
       severity: r.severity,
       ts: r.ts.toISOString(),
+      createdAt: r.createdAt.toISOString(),
       message: r.message,
       metadata: r.metadata as Record<string, unknown> | null,
     }));

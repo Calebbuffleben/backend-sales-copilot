@@ -139,6 +139,7 @@ export class FeedbackGateway
               type: true;
               severity: true;
               ts: true;
+              createdAt: true;
               windowStart: true;
               windowEnd: true;
               message: true;
@@ -152,6 +153,7 @@ export class FeedbackGateway
               type: FeedbackType;
               severity: FeedbackSeverity;
               ts: Date;
+              createdAt: Date;
               windowStart: Date;
               windowEnd: Date;
               message: string;
@@ -171,6 +173,7 @@ export class FeedbackGateway
         type: true,
         severity: true,
         ts: true,
+        createdAt: true,
         windowStart: true,
         windowEnd: true,
         message: true,
@@ -186,6 +189,7 @@ export class FeedbackGateway
         type: row.type,
         severity: row.severity,
         ts: row.ts.toISOString(),
+        createdAt: row.createdAt.toISOString(),
         windowStart: row.windowStart.toISOString(),
         windowEnd: row.windowEnd.toISOString(),
         message: row.message,
