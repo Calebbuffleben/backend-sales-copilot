@@ -113,10 +113,63 @@ export class FeedbackService {
       counts[key] = (counts[key] || 0) + 1;
     }
 
+    // Recent rows for HTTP polling clients (Chrome overlay on Railway: Socket.IO rooms are in-memory
+    // per replica, so broadcast may not reach the client on another instance; DB is always consistent.)
+    const recentRows = await (
+      this.prisma as unknown as {
+        feedbackEvent: {
+          findMany: (args: {
+            where: { meetingId: string };
+            orderBy: { createdAt: 'desc' };
+            take: number;
+            select: {
+              id: true;
+              type: true;
+              severity: true;
+              ts: true;
+              message: true;
+              metadata: true;
+            };
+          }) => Promise<
+            Array<{
+              id: string;
+              type: FeedbackType;
+              severity: FeedbackSeverity;
+              ts: Date;
+              message: string;
+              metadata: Prisma.JsonValue;
+            }>
+          >;
+        };
+      }
+    ).feedbackEvent.findMany({
+      where: { meetingId },
+      orderBy: { createdAt: 'desc' },
+      take: 40,
+      select: {
+        id: true,
+        type: true,
+        severity: true,
+        ts: true,
+        message: true,
+        metadata: true,
+      },
+    });
+
+    const recent = recentRows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      severity: r.severity,
+      ts: r.ts.toISOString(),
+      message: r.message,
+      metadata: r.metadata as Record<string, unknown> | null,
+    }));
+
     return {
       meetingId,
       counts,
       total: feedbacks.length,
+      recent,
     };
   }
 }
