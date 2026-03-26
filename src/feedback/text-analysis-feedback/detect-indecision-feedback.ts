@@ -1,4 +1,5 @@
 import { FeedbackSeverity, FeedbackType } from '@prisma/client';
+import { createHash } from 'crypto';
 
 import type {
   FeedbackEventPayload,
@@ -47,6 +48,19 @@ function isSemanticIndecisionCategory(category?: string): boolean {
   return typeof category === 'string'
     ? SEMANTIC_INDECISION_CATEGORIES.has(category)
     : false;
+}
+
+function makeDeterministicEventId(params: {
+  meetingId: string;
+  participantId: string;
+  feedbackType: FeedbackType;
+  severity: FeedbackSeverity;
+  windowEndMs: number;
+}): string {
+  // Deterministic, stable identity for idempotency & debugging across retries.
+  // Keep it short to reduce log/payload noise.
+  const raw = `${params.meetingId}|${params.participantId}|${params.feedbackType}|${params.severity}|${params.windowEndMs}`;
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
 
 export function detectClientIndecision(
@@ -183,6 +197,14 @@ export function detectClientIndecision(
     participantState.participantName ??
     event.participantName;
 
+  const deterministicEventId = makeDeterministicEventId({
+    meetingId: event.meetingId,
+    participantId: event.participantId,
+    feedbackType: FEEDBACK_TYPE,
+    severity: FEEDBACK_SEVERITY,
+    windowEndMs: nowMs,
+  });
+
   return {
     meetingId: event.meetingId,
     participantId: event.participantId,
@@ -195,6 +217,7 @@ export function detectClientIndecision(
     },
     message: 'Cliente demonstrando indecisão',
     metadata: {
+      eventId: deterministicEventId,
       confidence: roundNumber(confidence, 2),
       representativePhrases:
         representativePhrases.length > 0

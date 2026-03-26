@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { EgressAudioGateway } from './egress/egress-audio.gateway';
 import { FeedbackGrpcServer } from './feedback/feedback.grpc.server';
+import { RedisIoAdapter } from './redis-io.adapter';
 import * as dotenv from 'dotenv';
 import { join, resolve } from 'path';
 import * as grpc from '@grpc/grpc-js';
@@ -39,6 +40,22 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
+
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (redisUrl) {
+    const redisIoAdapter = new RedisIoAdapter(app);
+    await redisIoAdapter.connectToRedis();
+    app.useWebSocketAdapter(redisIoAdapter);
+    // eslint-disable-next-line no-console
+    console.log(
+      '[bootstrap] Socket.IO Redis adapter enabled | REDIS_URL=(set)',
+    );
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(
+      '[bootstrap] Socket.IO in-memory adapter (single replica or dev only) — set REDIS_URL for multi-replica broadcast',
+    );
+  }
 
   // Configure CORS for Chrome extension
   app.enableCors({
