@@ -49,15 +49,24 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Create WebSocket server on the same HTTP server
+    // Create WebSocket server disconnected from HTTP server events initially
     this.wss = new WebSocket.Server({
-      server: this.httpServer,
-      path: '/egress-audio',
+      noServer: true,
       perMessageDeflate: false, // Disable compression for binary data
     });
 
     this.wss.on('connection', (ws: WebSocket, req) => {
       this.handleConnection(ws, req);
+    });
+
+    // Manually handle the upgrade event so 'ws' doesn't destroy other connections
+    this.httpServer.on('upgrade', (request: any, socket: any, head: any) => {
+      const pathname = request.url ? request.url.split('?')[0] : '';
+      if (pathname === '/egress-audio') {
+        this.wss?.handleUpgrade(request, socket, head, (ws) => {
+          this.wss?.emit('connection', ws, request);
+        });
+      }
     });
   }
 
