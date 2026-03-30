@@ -97,6 +97,8 @@ O backend estará disponível em `http://localhost:3001`
 
 O backend expõe um gateway Socket.IO na porta 3001 (ou PORT configurada).
 
+**Multi-réplica (produção):** defina `REDIS_URL` (ex.: `redis://localhost:6379` ou URL do Redis gerenciado). O bootstrap em `main.ts` usa o adaptador `@socket.io/redis-adapter` para que o broadcast `feedback` alcance clientes conectados em qualquer instância. Sem `REDIS_URL`, o adaptador padrão é em memória (adequado para uma única réplica ou desenvolvimento).
+
 **Eventos suportados:**
 - `join-room`: Cliente se conecta a uma sala (ex: `feedback:meetingId`)
 - `feedback`: Recebe eventos de feedback em tempo real

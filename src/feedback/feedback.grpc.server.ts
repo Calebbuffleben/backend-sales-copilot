@@ -29,6 +29,7 @@ export class FeedbackGrpcServer {
     callback: UnaryCallback<PublishFeedbackResponse>,
   ) {
     try {
+      const tIngressStartMs = Date.now();
       const ingressEvent = mapPublishFeedbackRequest(call.request);
       const indecisionMetrics = ingressEvent.analysis.indecisionMetrics;
 
@@ -39,9 +40,17 @@ export class FeedbackGrpcServer {
       const feedbacks =
         await this.textAnalysisFeedbackService.handleIngress(ingressEvent);
       const firstFeedback = feedbacks[0];
+      const tIngressEndMs = Date.now();
+      const windowEndMs = ingressEvent.windowEnd.getTime();
+      const windowEndToBackendMs =
+        Number.isFinite(windowEndMs) && windowEndMs > 0
+          ? tIngressEndMs - windowEndMs
+          : null;
 
       console.log(
-        `[backend] detect/mapping produced feedbacks=${feedbacks.length}${firstFeedback ? ` firstType=${firstFeedback.type}` : ''}`,
+        `[backend] detect/mapping produced feedbacks=${feedbacks.length}${firstFeedback ? ` firstType=${firstFeedback.type}` : ''} handleMs=${
+          tIngressEndMs - tIngressStartMs
+        } windowEndToBackendMs=${windowEndToBackendMs}`,
       );
 
       callback(null, {
