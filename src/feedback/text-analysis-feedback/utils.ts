@@ -61,8 +61,7 @@ export function extractRepresentativePhrases(
           category === 'conversation_stalling' ||
           flags.client_indecision === true ||
           flags.stalling === true ||
-          flags.conversation_stalling === true ||
-          category === 'objection_soft')
+          flags.conversation_stalling === true)
       );
     })
     .sort(

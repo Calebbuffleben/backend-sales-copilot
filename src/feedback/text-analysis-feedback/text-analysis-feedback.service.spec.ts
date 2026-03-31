@@ -36,10 +36,11 @@ function buildEvent(
       analysisMode: 'semantic_suppressed',
       degradationLevel: 'L2',
       signalValidity: {
-        semantic_indecision: false,
+        indecision_fast: false,
+        indecision_semantic: false,
         audio_aggregate: false,
       },
-      suppressionReasons: ['semantic_feedback_suppressed_by_degradation'],
+      suppressionReasons: ['indecision_fast_suppressed_by_severe_degradation'],
     },
     ...overrides,
   };
@@ -62,5 +63,44 @@ describe('TextAnalysisFeedbackService', () => {
 
     expect(feedbacks).toEqual([]);
     expect(feedbackService.createFeedback).not.toHaveBeenCalled();
+  });
+
+  it('keeps indecision eligible on fast path when only semantic enrichment is suppressed', async () => {
+    const feedbackService = {
+      createFeedback: jest.fn().mockResolvedValue({ id: 'feedback-1' }),
+    };
+    const meetingStateStore = new MeetingStateStore();
+    const contextProvider = new ParticipantContextProvider(meetingStateStore);
+    const service = new TextAnalysisFeedbackService(
+      meetingStateStore,
+      contextProvider,
+      feedbackService as never,
+    );
+
+    const feedbacks = await service.handleIngress(
+      buildEvent({
+        text: 'Se nao der certo agora, vou pensar e te aviso depois.',
+        analysis: {
+          ...buildEvent().analysis,
+          salesCategory: undefined,
+          categoryIntensity: undefined,
+          categoryFlags: {},
+          conditionalKeywordsDetected: ['se'],
+          indecisionMetrics: {
+            conditionalLanguageScore: 0.8,
+            postponementLikelihood: 0.75,
+          },
+          signalValidity: {
+            indecision_fast: true,
+            indecision_semantic: false,
+            audio_aggregate: false,
+          },
+          suppressionReasons: ['indecision_semantic_suppressed_by_degradation'],
+        },
+      }),
+    );
+
+    expect(feedbackService.createFeedback).toHaveBeenCalledTimes(1);
+    expect(feedbacks).toHaveLength(1);
   });
 });

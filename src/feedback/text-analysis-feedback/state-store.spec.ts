@@ -28,10 +28,11 @@ function buildEvent(
       analysisMode: 'audio_only',
       degradationLevel: 'L0',
       signalValidity: {
-        semantic_indecision: false,
+        indecision_fast: false,
+        indecision_semantic: false,
         audio_aggregate: true,
       },
-      suppressionReasons: ['semantic_not_available_for_audio_only_ingress'],
+      suppressionReasons: ['indecision_not_available_for_audio_only_ingress'],
     },
     ...overrides,
   };
@@ -60,7 +61,8 @@ describe('MeetingStateStore', () => {
         salesCategoryConfidence: 0.2,
         categoryIntensity: 0.46,
         signalValidity: {
-          semantic_indecision: true,
+          indecision_fast: true,
+          indecision_semantic: true,
           audio_aggregate: true,
         },
         suppressionReasons: [],

@@ -30,7 +30,8 @@ function buildEvent(
       analysisMode: 'full_semantic',
       degradationLevel: 'L0',
       signalValidity: {
-        semantic_indecision: true,
+        indecision_fast: true,
+        indecision_semantic: true,
         audio_aggregate: true,
       },
       suppressionReasons: [],

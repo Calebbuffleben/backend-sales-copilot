@@ -36,7 +36,8 @@ function buildEvent(
       analysisMode: 'full_semantic',
       degradationLevel: 'L0',
       signalValidity: {
-        semantic_indecision: true,
+        indecision_fast: true,
+        indecision_semantic: true,
         audio_aggregate: true,
       },
       suppressionReasons: [],
@@ -69,9 +70,11 @@ describe('detectClientIndecision', () => {
     expect(payload?.type).toBe('sales_client_indecision');
     expect(payload?.metadata['salesCategory']).toBe('client_indecision');
     expect(payload?.metadata['ruleMatches']).toMatchObject({
-      semanticCategory: true,
+      semanticStrong: true,
       persistentIndecision: false,
+      fastConservative: false,
     });
+    expect(payload?.metadata['signalPath']).toBe('semantic');
   });
 
   it('keeps emitting when semantic indecision persists across recent windows', () => {
@@ -82,7 +85,7 @@ describe('detectClientIndecision', () => {
       text: 'Nao sei ainda, preciso avaliar melhor.',
       analysis: {
         ...buildEvent().analysis,
-        categoryIntensity: 0.42,
+        categoryIntensity: 0.46,
       },
     });
     meetingStateStore.recordIngress(firstEvent);
@@ -104,7 +107,7 @@ describe('detectClientIndecision', () => {
 
     expect(payload).not.toBeNull();
     expect(payload?.metadata['ruleMatches']).toMatchObject({
-      semanticCategory: true,
+      semanticStrong: true,
       persistentIndecision: true,
     });
     expect(payload?.metadata['representativePhrases']).toEqual(
@@ -113,5 +116,82 @@ describe('detectClientIndecision', () => {
         'Talvez funcione, mas ainda nao tenho certeza.',
       ]),
     );
+  });
+
+  it('emits on degraded fast path only when conservative lexical evidence is strong', () => {
+    const event = buildEvent({
+      text: 'Se nao der certo agora, vou pensar e te aviso depois.',
+      analysis: {
+        ...buildEvent().analysis,
+        salesCategory: undefined,
+        categoryIntensity: undefined,
+        categoryFlags: {},
+        conditionalKeywordsDetected: ['se'],
+        indecisionMetrics: {
+          conditionalLanguageScore: 0.8,
+          postponementLikelihood: 0.75,
+        },
+        analysisMode: 'semantic_suppressed',
+        degradationLevel: 'L2',
+        signalValidity: {
+          indecision_fast: true,
+          indecision_semantic: false,
+          audio_aggregate: true,
+        },
+        suppressionReasons: ['indecision_semantic_suppressed_by_degradation'],
+      },
+    });
+    const meetingState = meetingStateStore.recordIngress(event);
+
+    const payload = detectClientIndecision(
+      meetingState,
+      event,
+      event.timestamp.getTime(),
+      contextProvider,
+    );
+
+    expect(payload).not.toBeNull();
+    expect(payload?.metadata['signalPath']).toBe('fast');
+    expect(payload?.metadata['ruleMatches']).toMatchObject({
+      semanticStrong: false,
+      semanticSupporting: false,
+      persistentIndecision: false,
+      fastConservative: true,
+    });
+  });
+
+  it('does not emit for weak lexical evidence without semantic support', () => {
+    const event = buildEvent({
+      text: 'Talvez depois.',
+      analysis: {
+        ...buildEvent().analysis,
+        salesCategory: undefined,
+        categoryIntensity: undefined,
+        categoryFlags: {},
+        conditionalKeywordsDetected: [],
+        indecisionMetrics: {
+          conditionalLanguageScore: 0.0,
+          postponementLikelihood: 0.6,
+        },
+        analysisMode: 'semantic_suppressed',
+        degradationLevel: 'L2',
+        signalValidity: {
+          indecision_fast: true,
+          indecision_semantic: false,
+          audio_aggregate: true,
+        },
+        suppressionReasons: ['indecision_semantic_suppressed_by_degradation'],
+      },
+    });
+    const meetingState = meetingStateStore.recordIngress(event);
+
+    const payload = detectClientIndecision(
+      meetingState,
+      event,
+      event.timestamp.getTime(),
+      contextProvider,
+    );
+
+    expect(payload).toBeNull();
   });
 });

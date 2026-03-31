@@ -6,7 +6,7 @@ export function buildTextAnalysisDetectors(): TextAnalysisDetectorDefinition[] {
   return [
     {
       name: 'detectClientIndecision',
-      requiredSignals: ['semantic_indecision'],
+      requiredSignals: ['indecision_fast'],
       run: detectClientIndecision,
     },
     {
