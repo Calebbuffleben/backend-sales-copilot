@@ -27,6 +27,13 @@ function buildEvent(
       samplesCount: 16_000,
       speechCount: 13_000,
       meanRmsDbfs: -18,
+      analysisMode: 'full_semantic',
+      degradationLevel: 'L0',
+      signalValidity: {
+        semantic_indecision: true,
+        audio_aggregate: true,
+      },
+      suppressionReasons: [],
     },
     ...overrides,
   };

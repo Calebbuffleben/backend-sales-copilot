@@ -21,6 +21,10 @@ export interface TextAnalysisIngress {
   samplesCount?: number;
   speechCount?: number;
   meanRmsDbfs?: number;
+  analysisMode?: string;
+  degradationLevel?: string;
+  signalValidity: Record<string, boolean>;
+  suppressionReasons: string[];
 }
 
 export interface TextAnalysisIngressEvent {
@@ -113,3 +117,9 @@ export type TextAnalysisDetector = (
   nowMs: number,
   ctx: FeedbackRuleContext,
 ) => FeedbackEventPayload | null;
+
+export interface TextAnalysisDetectorDefinition {
+  name: string;
+  requiredSignals?: readonly string[];
+  run: TextAnalysisDetector;
+}

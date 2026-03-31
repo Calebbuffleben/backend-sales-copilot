@@ -27,6 +27,10 @@ export interface ProtoAnalysisPayload {
   samples_count?: number;
   speech_count?: number;
   mean_rms_dbfs?: number;
+  analysis_mode?: string;
+  degradation_level?: string;
+  signal_validity?: Record<string, boolean>;
+  suppression_reasons?: string[];
 }
 
 export interface PublishFeedbackRequest {
@@ -132,6 +136,10 @@ function mapAnalysisMetadata(
     categoryFlags: analysis.category_flags || {},
     conditionalKeywordsDetected: analysis.conditional_keywords_detected || [],
     indecisionMetrics,
+    analysisMode: analysis.analysis_mode,
+    degradationLevel: analysis.degradation_level,
+    signalValidity: analysis.signal_validity || {},
+    suppressionReasons: analysis.suppression_reasons || [],
   });
 }
 
@@ -181,6 +189,10 @@ export function mapPublishFeedbackRequest(
       samplesCount: request.analysis?.samples_count,
       speechCount: request.analysis?.speech_count,
       meanRmsDbfs: request.analysis?.mean_rms_dbfs,
+      analysisMode: request.analysis?.analysis_mode,
+      degradationLevel: request.analysis?.degradation_level,
+      signalValidity: request.analysis?.signal_validity || {},
+      suppressionReasons: request.analysis?.suppression_reasons || [],
     },
   };
 }

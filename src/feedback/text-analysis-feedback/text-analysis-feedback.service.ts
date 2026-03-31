@@ -8,7 +8,7 @@ import { buildTextAnalysisDetectors } from './detectors';
 import { MeetingStateStore } from './state-store';
 import type {
   FeedbackEventPayload,
-  TextAnalysisDetector,
+  TextAnalysisDetectorDefinition,
   TextAnalysisIngressEvent,
 } from './types';
 
@@ -18,7 +18,7 @@ type PersistedFeedbackEvent = Prisma.FeedbackEventGetPayload<
 
 @Injectable()
 export class TextAnalysisFeedbackService {
-  private readonly detectors: TextAnalysisDetector[] =
+  private readonly detectors: TextAnalysisDetectorDefinition[] =
     buildTextAnalysisDetectors();
 
   constructor(
@@ -45,12 +45,35 @@ export class TextAnalysisFeedbackService {
     );
 
     const nowMs = event.timestamp.getTime();
+    const eligibleDetectors = this.detectors.filter((detector) => {
+      const requiredSignals = detector.requiredSignals ?? [];
+      if (requiredSignals.length === 0) {
+        return true;
+      }
+
+      const missingSignals = requiredSignals.filter(
+        (signal) => event.analysis.signalValidity[signal] === false,
+      );
+      if (missingSignals.length === 0) {
+        return true;
+      }
+
+      console.log(
+        `[TextAnalysisFeedbackService] detector suppressed_by_quality name=${detector.name} signals=${missingSignals.join(',')} mode=${event.analysis.analysisMode ?? 'n/a'} level=${event.analysis.degradationLevel ?? 'n/a'} reasons=${event.analysis.suppressionReasons.join('|') || 'n/a'}`,
+      );
+      return false;
+    });
     console.log(
-      `[TextAnalysisFeedbackService] running detectors count=${this.detectors.length}`,
+      `[TextAnalysisFeedbackService] running detectors count=${eligibleDetectors.length} total=${this.detectors.length} mode=${event.analysis.analysisMode ?? 'n/a'} level=${event.analysis.degradationLevel ?? 'n/a'}`,
     );
-    const payloads = this.detectors
+    const payloads = eligibleDetectors
       .map((detector) =>
-        detector(meetingState, event, nowMs, this.participantContextProvider),
+        detector.run(
+          meetingState,
+          event,
+          nowMs,
+          this.participantContextProvider,
+        ),
       )
       .filter((payload): payload is FeedbackEventPayload => Boolean(payload));
 
