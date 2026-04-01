@@ -139,10 +139,6 @@ export class PipelineService {
 
       const t4_sent = Date.now();
 
-      this.logger.log(
-        `Pipeline → gRPC | ${key} | seq=${seq} | sampleRate=${meta.sampleRate} | channels=${meta.channels} | pcmBytes=${pcm.length} | wavBytes=${wavBuffer.length} | expectedPcmBytesPerSec=${meta.sampleRate * meta.channels * 2}`,
-      );
-
       // Latência detalhada (habilitar LOG_LEVEL=debug para ver no deploy)
       this.logger.debug(`[LATENCY] Audio pipeline timing`, {
         meetingId: meta.meetingId,
