@@ -4,6 +4,7 @@ import type { Prisma } from '@prisma/client';
 import { FeedbackService } from '../feedback.service';
 import { mapFeedbackEventPayloadToFeedbackPayload } from '../feedback.mapper';
 import { ParticipantContextProvider } from './context-provider';
+import { isFeedbackTraceDebug, logFeedbackTrace, makeFeedbackTraceId } from '../feedback-trace';
 import { buildTextAnalysisDetectors } from './detectors';
 import { MeetingStateStore } from './state-store';
 import type {
@@ -30,10 +31,6 @@ export class TextAnalysisFeedbackService {
   async handleIngress(
     event: TextAnalysisIngressEvent,
   ): Promise<PersistedFeedbackEvent[]> {
-    console.log(
-      `[TextAnalysisFeedbackService] handleIngress meetingId=${event.meetingId} participantId=${event.participantId} ts=${event.timestamp.toISOString()} textChars=${event.text.length} salesCategory=${event.analysis.salesCategory ?? 'n/a'} indecisionMetrics=${JSON.stringify(event.analysis.indecisionMetrics ?? {})}`,
-    );
-
     const meetingState = this.meetingStateStore.recordIngress(event);
     this.participantContextProvider.recordParticipantMetadata(
       event.meetingId,
@@ -45,9 +42,20 @@ export class TextAnalysisFeedbackService {
     );
 
     const nowMs = event.timestamp.getTime();
-    console.log(
-      `[TextAnalysisFeedbackService] running detectors count=${this.detectors.length}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      const traceId = makeFeedbackTraceId(
+        event.meetingId,
+        event.participantId,
+        event.windowEnd.getTime(),
+      );
+      logFeedbackTrace('backend.detectorBatch', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detectorCount: this.detectors.length,
+      });
+    }
     const payloads = this.detectors
       .map((detector) =>
         detector(meetingState, event, nowMs, this.participantContextProvider),
@@ -56,18 +64,12 @@ export class TextAnalysisFeedbackService {
 
     const persistedFeedbacks: PersistedFeedbackEvent[] = [];
     for (const payload of payloads) {
-      console.log(
-        `[TextAnalysisFeedbackService] detector matched type=${payload.type} severity=${payload.severity} message=${payload.message} confidence=${payload.metadata && typeof payload.metadata === 'object' ? payload.metadata['confidence'] : 'n/a'}`,
-      );
       const feedbackPayload = mapFeedbackEventPayloadToFeedbackPayload(payload);
       persistedFeedbacks.push(
         await this.feedbackService.createFeedback(feedbackPayload),
       );
     }
 
-    console.log(
-      `[TextAnalysisFeedbackService] persistedFeedbacks=${persistedFeedbacks.length}`,
-    );
     return persistedFeedbacks;
   }
 }

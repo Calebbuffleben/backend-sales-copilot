@@ -8,6 +8,11 @@ import type {
   TextAnalysisIngressEvent,
 } from '../text-analysis-feedback/types';
 import { inCooldown, roundNumber, setCooldown } from '../text-analysis-feedback/utils';
+import {
+  isFeedbackTraceDebug,
+  logFeedbackTrace,
+  makeFeedbackTraceId,
+} from '../feedback-trace';
 
 const FEEDBACK_TYPE = FeedbackType.conversation_dominance;
 const FEEDBACK_SEVERITY = FeedbackSeverity.warning;
@@ -43,11 +48,24 @@ export function detectConversationDominance(
   nowMs: number,
   _ctx: FeedbackRuleContext,
 ): FeedbackEventPayload | null {
+  const traceId = makeFeedbackTraceId(
+    event.meetingId,
+    event.participantId,
+    event.windowEnd.getTime(),
+  );
   const participantState = meetingState.byParticipant[event.participantId];
   if (!participantState) {
-    console.warn(
-      `[detectConversationDominance] missing participantState participantId=${event.participantId}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'missing_participant_state',
+      });
+    }
     return null;
   }
 
@@ -75,6 +93,18 @@ export function detectConversationDominance(
   );
 
   if (cooldownMs > 0 && inCooldown(participantState, FEEDBACK_TYPE, nowMs)) {
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'cooldown',
+        cooldownMs,
+      });
+    }
     return null;
   }
 
@@ -84,6 +114,18 @@ export function detectConversationDominance(
   );
 
   if (recentSamples.length === 0) {
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'no_samples',
+        lookbackMs,
+      });
+    }
     return null;
   }
 
@@ -100,6 +142,19 @@ export function detectConversationDominance(
   }
 
   if (meetingSpeechCount < minMeetingSpeechCount) {
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'low_meeting_speech',
+        meetingSpeechCount,
+        minMeetingSpeechCount,
+      });
+    }
     return null;
   }
 
@@ -113,11 +168,36 @@ export function detectConversationDominance(
   }
 
   if (!dominantParticipantId || dominantParticipantId !== event.participantId) {
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'not_dominant_participant',
+        dominantParticipantId,
+      });
+    }
     return null;
   }
 
   const speechShare = dominantSpeechCount / Math.max(meetingSpeechCount, 1);
   if (speechShare < threshold) {
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'conversation_dominance',
+        outcome: 'suppress',
+        reason: 'below_threshold',
+        speechShare: roundNumber(speechShare, 3),
+        threshold,
+      });
+    }
     return null;
   }
 
@@ -135,6 +215,24 @@ export function detectConversationDominance(
     windowEndMs: nowMs,
   });
 
+  logFeedbackTrace('backend.detector', {
+    traceId,
+    meetingId: event.meetingId,
+    participantId: event.participantId,
+    windowEndMs: event.windowEnd.getTime(),
+    detector: 'conversation_dominance',
+    outcome: 'emit',
+    confidence,
+    speechShare: roundNumber(speechShare, 3),
+    threshold,
+    meetingSpeechCount,
+    participantSpeechCount: dominantSpeechCount,
+    ruleMatches: {
+      participantIsDominant: true,
+      thresholdReached: true,
+    },
+  });
+
   return {
     meetingId: event.meetingId,
     participantId: event.participantId,
@@ -147,6 +245,7 @@ export function detectConversationDominance(
     },
     message: 'Voce esta falando mais que o restante da conversa',
     metadata: {
+      feedbackTraceId: traceId,
       eventId: deterministicEventId,
       confidence,
       speechShare: roundNumber(speechShare, 3),

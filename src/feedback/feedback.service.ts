@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedbackGateway } from './feedback.gateway';
+import { logFeedbackTrace, makeFeedbackTraceId } from './feedback-trace';
 
 // Import Prisma types from generated client
 import type { Prisma } from '@prisma/client';
@@ -9,6 +10,27 @@ import type { FeedbackType, FeedbackSeverity } from '@prisma/client';
 
 // FeedbackEvent type from Prisma
 type FeedbackEvent = Prisma.FeedbackEventGetPayload<Record<string, never>>;
+
+function metadataRecord(
+  metadata: Record<string, unknown> | Prisma.JsonValue | null | undefined,
+): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {};
+  }
+  return metadata as Record<string, unknown>;
+}
+
+function resolveFeedbackTraceId(
+  meetingId: string,
+  participantId: string,
+  windowEndMs: number,
+  metadata: Record<string, unknown>,
+): string {
+  const id = metadata['feedbackTraceId'];
+  return typeof id === 'string' && id.length > 0
+    ? id
+    : makeFeedbackTraceId(meetingId, participantId, windowEndMs);
+}
 
 export interface FeedbackPayload {
   meetingId: string;
@@ -37,10 +59,7 @@ export class FeedbackService {
         ? tIngressStartMs - windowEndMs
         : null;
 
-    const eventId =
-      payload.metadata && typeof payload.metadata === 'object'
-        ? (payload.metadata as any).eventId
-        : undefined;
+    const payloadMeta = metadataRecord(payload.metadata);
 
     // Idempotency guard: prevent duplicate rows (and duplicate broadcasts)
     // when upstream retries the same window.
@@ -62,13 +81,18 @@ export class FeedbackService {
     });
 
     if (existing) {
-      console.log(
-        `[FeedbackService] idempotent hit (skip create) feedbackId=${existing.id} eventId=${String(
-          eventId,
-        )} windowEndToIngressMs=${windowEndToIngressMs}`,
+      const existingMeta = metadataRecord(
+        existing.metadata as Prisma.JsonValue | null,
+      );
+      const traceId = resolveFeedbackTraceId(
+        existing.meetingId,
+        existing.participantId,
+        windowEndMs,
+        existingMeta,
       );
       // Still broadcast: ensures delivery even if retry happens before first emit.
       const room = `feedback:${existing.meetingId}`;
+      const tBroadcastStartMs = Date.now();
       this.feedbackGateway.broadcastFeedback(room, {
         id: existing.id,
         meetingId: existing.meetingId,
@@ -82,26 +106,38 @@ export class FeedbackService {
         message: existing.message,
         metadata: existing.metadata,
       });
+      const tBroadcastEndMs = Date.now();
+      const broadcastMs = tBroadcastEndMs - tBroadcastStartMs;
+      const windowEndToBroadcastEmitMs = tBroadcastEndMs - windowEndMs;
+      const detectorEventId = existingMeta['eventId'];
+      logFeedbackTrace('backend.emit', {
+        traceId,
+        meetingId: existing.meetingId,
+        participantId: existing.participantId,
+        windowEndMs,
+        feedbackType: existing.type,
+        eventId:
+          typeof detectorEventId === 'string' ? detectorEventId : existing.id,
+        feedbackEmitId: existing.id,
+        windowEndToBroadcastEmitMs,
+        broadcastMs,
+        windowEndToIngressMs,
+        idempotentSkipCreate: true,
+      });
       return existing;
     }
-
-    const tips =
-      payload.metadata && typeof payload.metadata === 'object'
-        ? (payload.metadata as any).tips
-        : undefined;
-    const tipsCount = Array.isArray(tips) ? tips.length : 0;
-    console.log(
-      `[FeedbackService] createFeedback type=${payload.type} severity=${payload.severity} meetingId=${payload.meetingId} participantId=${payload.participantId} message="${payload.message}" tipsCount=${tipsCount}`,
-    );
 
     // Phase 6: broadcast first (realtime path), persist asynchronously (DB latency off hot path).
     const feedbackId = randomUUID();
     const createdAt = new Date();
     const room = `feedback:${payload.meetingId}`;
-    const tBroadcastStartMs = Date.now();
-    console.log(
-      `[FeedbackService] broadcastFeedback (before persist) room=${room} type=${payload.type} severity=${payload.severity} windowEndToIngressMs=${windowEndToIngressMs}`,
+    const traceId = resolveFeedbackTraceId(
+      payload.meetingId,
+      payload.participantId,
+      windowEndMs,
+      payloadMeta,
     );
+    const tBroadcastStartMs = Date.now();
     this.feedbackGateway.broadcastFeedback(room, {
       id: feedbackId,
       meetingId: payload.meetingId,
@@ -118,9 +154,21 @@ export class FeedbackService {
     const tBroadcastEndMs = Date.now();
     const broadcastMs = tBroadcastEndMs - tBroadcastStartMs;
     const windowEndToBroadcastEmitMs = tBroadcastEndMs - windowEndMs;
-    console.log(
-      `[FeedbackService] broadcasted feedbackId=${feedbackId} broadcastMs=${broadcastMs} windowEndToBroadcastEmitMs=${windowEndToBroadcastEmitMs}`,
-    );
+    const detectorEventId = payloadMeta['eventId'];
+    logFeedbackTrace('backend.emit', {
+      traceId,
+      meetingId: payload.meetingId,
+      participantId: payload.participantId,
+      windowEndMs,
+      feedbackType: payload.type,
+      eventId:
+        typeof detectorEventId === 'string' ? detectorEventId : feedbackId,
+      feedbackEmitId: feedbackId,
+      windowEndToBroadcastEmitMs,
+      broadcastMs,
+      windowEndToIngressMs,
+      idempotentSkipCreate: false,
+    });
 
     this.persistFeedbackAsync(payload, feedbackId, createdAt);
 

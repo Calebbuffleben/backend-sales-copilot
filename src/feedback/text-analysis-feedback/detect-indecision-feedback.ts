@@ -8,6 +8,11 @@ import type {
   TextAnalysisIngressEvent,
 } from './types';
 import {
+  isFeedbackTraceDebug,
+  logFeedbackTrace,
+  makeFeedbackTraceId,
+} from '../feedback-trace';
+import {
   extractRepresentativePhrases,
   inCooldown,
   roundNumber,
@@ -69,11 +74,24 @@ export function detectClientIndecision(
   nowMs: number,
   ctx: FeedbackRuleContext,
 ): FeedbackEventPayload | null {
+  const traceId = makeFeedbackTraceId(
+    event.meetingId,
+    event.participantId,
+    event.windowEnd.getTime(),
+  );
   const participantState = meetingState.byParticipant[event.participantId];
   if (!participantState) {
-    console.warn(
-      `[detectClientIndecision] missing participantState participantId=${event.participantId}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'sales_client_indecision',
+        outcome: 'suppress',
+        reason: 'missing_participant_state',
+      });
+    }
     return null;
   }
 
@@ -83,9 +101,17 @@ export function detectClientIndecision(
     event.participantRole ??
     'unknown';
   if (participantRole === 'host') {
-    console.log(
-      `[detectClientIndecision] suppressed: participant is host participantId=${event.participantId}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'sales_client_indecision',
+        outcome: 'suppress',
+        reason: 'host',
+      });
+    }
     return null;
   }
 
@@ -96,9 +122,18 @@ export function detectClientIndecision(
     effectiveIndecisionCooldownMs > 0 &&
     inCooldown(participantState, FEEDBACK_TYPE, nowMs)
   ) {
-    console.log(
-      `[detectClientIndecision] suppressed: cooldown active participantId=${event.participantId} cooldownMs=${effectiveIndecisionCooldownMs}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'sales_client_indecision',
+        outcome: 'suppress',
+        reason: 'cooldown',
+        cooldownMs: effectiveIndecisionCooldownMs,
+      });
+    }
     return null;
   }
 
@@ -108,9 +143,17 @@ export function detectClientIndecision(
     nowMs - participantState.lastFeedbackTextAt < SAME_SEGMENT_WINDOW_MS &&
     textSimilar(participantState.lastFeedbackText, event.text, 0.6)
   ) {
-    console.log(
-      `[detectClientIndecision] suppressed: similar text within segment participantId=${event.participantId}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'sales_client_indecision',
+        outcome: 'suppress',
+        reason: 'similar_segment',
+      });
+    }
     return null;
   }
 
@@ -149,9 +192,29 @@ export function detectClientIndecision(
     !semanticCategoryRule &&
     !persistentRule
   ) {
-    console.log(
-      `[detectClientIndecision] no rule match participantId=${event.participantId} condScore=${condScore.toFixed(2)} postScore=${postScore.toFixed(2)} category=${currentCategory ?? 'n/a'} intensity=${currentIntensity.toFixed(2)} semanticFlag=${currentSemanticFlag} hasRecentSemanticIndecision=${hasRecentSemanticIndecision} rules: conditional=${conditionalRule} postponement=${postponementRule} semanticCategory=${semanticCategoryRule} persistent=${persistentRule}`,
-    );
+    if (isFeedbackTraceDebug()) {
+      logFeedbackTrace('backend.detector', {
+        traceId,
+        meetingId: event.meetingId,
+        participantId: event.participantId,
+        windowEndMs: event.windowEnd.getTime(),
+        detector: 'sales_client_indecision',
+        outcome: 'suppress',
+        reason: 'no_rule_match',
+        condScore: roundNumber(condScore, 3),
+        postScore: roundNumber(postScore, 3),
+        category: currentCategory ?? null,
+        intensity: roundNumber(currentIntensity, 3),
+        semanticFlag: currentSemanticFlag,
+        hasRecentSemanticIndecision,
+        ruleMatches: {
+          conditionalLanguage: conditionalRule,
+          postponement: postponementRule,
+          semanticCategory: semanticCategoryRule,
+          persistentIndecision: persistentRule,
+        },
+      });
+    }
     return null;
   }
 
@@ -162,9 +225,27 @@ export function detectClientIndecision(
     persistentRule ? Math.max(currentIntensity, 0.45) : 0,
   );
 
-  console.log(
-    `[detectClientIndecision] emitting participantId=${event.participantId} condScore=${condScore.toFixed(2)} postScore=${postScore.toFixed(2)} category=${currentCategory ?? 'n/a'} intensity=${currentIntensity.toFixed(2)} semanticFlag=${currentSemanticFlag} hasRecentSemanticIndecision=${hasRecentSemanticIndecision} confidence=${roundNumber(confidence, 2)} rules: conditional=${conditionalRule} postponement=${postponementRule} semanticCategory=${semanticCategoryRule} persistent=${persistentRule}`,
-  );
+  logFeedbackTrace('backend.detector', {
+    traceId,
+    meetingId: event.meetingId,
+    participantId: event.participantId,
+    windowEndMs: event.windowEnd.getTime(),
+    detector: 'sales_client_indecision',
+    outcome: 'emit',
+    condScore: roundNumber(condScore, 3),
+    postScore: roundNumber(postScore, 3),
+    category: currentCategory ?? null,
+    intensity: roundNumber(currentIntensity, 3),
+    semanticFlag: currentSemanticFlag,
+    hasRecentSemanticIndecision,
+    confidence: roundNumber(confidence, 2),
+    ruleMatches: {
+      conditionalLanguage: conditionalRule,
+      postponement: postponementRule,
+      semanticCategory: semanticCategoryRule,
+      persistentIndecision: persistentRule,
+    },
+  });
 
   const representativePhrases = extractRepresentativePhrases(
     participantState,
@@ -217,6 +298,7 @@ export function detectClientIndecision(
     },
     message: 'Cliente demonstrando indecisão',
     metadata: {
+      feedbackTraceId: traceId,
       eventId: deterministicEventId,
       confidence: roundNumber(confidence, 2),
       representativePhrases:

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 
+import { logFeedbackTrace, makeFeedbackTraceId } from './feedback-trace';
 import { mapPublishFeedbackRequest } from './feedback.mapper';
 import { TextAnalysisFeedbackService } from './text-analysis-feedback/text-analysis-feedback.service';
 
@@ -32,26 +33,45 @@ export class FeedbackGrpcServer {
       const tIngressStartMs = Date.now();
       const ingressEvent = mapPublishFeedbackRequest(call.request);
       const indecisionMetrics = ingressEvent.analysis.indecisionMetrics;
-
-      console.log(
-        `[grpc->backend] PublishFeedback meetingId=${ingressEvent.meetingId} participantId=${ingressEvent.participantId} ts=${ingressEvent.timestamp.toISOString()} transcriptChars=${ingressEvent.text.length} indecision={cond:${indecisionMetrics?.conditionalLanguageScore ?? 0} post:${indecisionMetrics?.postponementLikelihood ?? 0}} salesCategory=${ingressEvent.analysis.salesCategory ?? 'n/a'}`,
+      const windowEndMs = ingressEvent.windowEnd.getTime();
+      const traceId = makeFeedbackTraceId(
+        ingressEvent.meetingId,
+        ingressEvent.participantId,
+        windowEndMs,
       );
+      const flagsTrue: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(ingressEvent.analysis.categoryFlags)) {
+        if (v) {
+          flagsTrue[k] = true;
+        }
+      }
 
       const feedbacks =
         await this.textAnalysisFeedbackService.handleIngress(ingressEvent);
       const firstFeedback = feedbacks[0];
       const tIngressEndMs = Date.now();
-      const windowEndMs = ingressEvent.windowEnd.getTime();
       const windowEndToBackendMs =
         Number.isFinite(windowEndMs) && windowEndMs > 0
           ? tIngressEndMs - windowEndMs
           : null;
 
-      console.log(
-        `[backend] detect/mapping produced feedbacks=${feedbacks.length}${firstFeedback ? ` firstType=${firstFeedback.type}` : ''} handleMs=${
-          tIngressEndMs - tIngressStartMs
-        } windowEndToBackendMs=${windowEndToBackendMs}`,
-      );
+      logFeedbackTrace('backend.ingress', {
+        traceId,
+        meetingId: ingressEvent.meetingId,
+        participantId: ingressEvent.participantId,
+        windowEndMs,
+        transcriptChars: ingressEvent.text.length,
+        salesCategory: ingressEvent.analysis.salesCategory ?? null,
+        categoryIntensity: ingressEvent.analysis.categoryIntensity ?? null,
+        flagsTrue:
+          Object.keys(flagsTrue).length > 0 ? flagsTrue : undefined,
+        indecisionCond: indecisionMetrics?.conditionalLanguageScore ?? null,
+        indecisionPost: indecisionMetrics?.postponementLikelihood ?? null,
+        handleMs: tIngressEndMs - tIngressStartMs,
+        windowEndToBackendMs,
+        feedbacksEmitted: feedbacks.length,
+        firstFeedbackType: firstFeedback?.type ?? null,
+      });
 
       callback(null, {
         accepted: true,
