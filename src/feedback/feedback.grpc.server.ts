@@ -40,6 +40,7 @@ export class FeedbackGrpcServer {
       );
 
       // We just call the LLMFeedbackService
+      console.log(`[Step 7] Recebido payload do LLM via gRPC no backend para reunião ${ingressEvent.meetingId}`);
       await this.llmFeedbackService.handleIngress(ingressEvent);
 
       const tIngressEndMs = Date.now();

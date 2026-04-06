@@ -14,11 +14,12 @@ export class LLMFeedbackService {
   async handleIngress(event: LLMIngressEvent): Promise<void> {
     if (!event.analysis.directFeedback) {
       // Nenhum feedback direto foi gerado pela LLM para esse trecho
+      this.logger.log(`[Step 8] O evento recebido (Reunião ${event.meetingId}) não possui feedback direto da LLM, ignorando propagação para UI.`);
       return;
     }
 
     try {
-      this.logger.log(`Emitindo e salvando LLM Feedback para sala ${event.meetingId}`);
+      this.logger.log(`[Step 8] Processando feedback positivo da LLM para persistência/UI: "${event.analysis.directFeedback}"`);
 
       // Passa a bola para o FeedbackService que orquestra a persistencia DB
       // e consequentemente emite o broadcast de WebSockets via Gateway

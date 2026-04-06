@@ -137,6 +137,9 @@ export class FeedbackService {
       windowEndMs,
       payloadMeta,
     );
+    
+    console.log(`[Step 9] Salvando insight da LLM no Database e despachando para WebSockets em tempo real (Sala: ${payload.meetingId})`);
+    
     const tBroadcastStartMs = Date.now();
     this.feedbackGateway.broadcastFeedback(room, {
       id: feedbackId,
