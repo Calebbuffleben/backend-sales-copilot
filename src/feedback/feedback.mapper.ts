@@ -1,7 +1,6 @@
 import { FeedbackSeverity, FeedbackType } from '@prisma/client';
 
-import type { FeedbackPayload } from './feedback.service';
-import type { ParticipantRole } from './text-analysis-feedback/types';
+export type ParticipantRole = 'host' | 'participant' | 'unknown';
 
 export interface ProtoAnalysisPayload {
   direct_feedback?: string;
