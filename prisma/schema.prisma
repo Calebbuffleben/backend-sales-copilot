@@ -77,6 +77,7 @@ enum FeedbackType {
   sales_client_indecision
   sales_solution_understood
   conversation_dominance
+  llm_insight
 }
 
 model FeedbackEvent {

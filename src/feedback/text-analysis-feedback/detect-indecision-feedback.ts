@@ -181,8 +181,8 @@ export function detectClientIndecision(
   const currentSemanticQualifies =
     (currentSemanticCategory || currentSemanticFlag) && currentIntensity >= 0.4;
 
-  const conditionalRule = condScore > 0.6;
-  const postponementRule = postScore > 0.6;
+  const conditionalRule = condScore >= 0.6;
+  const postponementRule = postScore >= 0.6;
   const semanticCategoryRule = currentSemanticQualifies;
   const persistentRule = currentSemanticQualifies && hasRecentSemanticIndecision;
 
