@@ -21,19 +21,44 @@ export class LLMFeedbackService {
     try {
       this.logger.log(`[Step 8] Processando feedback positivo da LLM para persistência/UI: "${event.analysis.directFeedback}"`);
 
+      let severity: 'info' | 'warning' | 'critical' = 'info';
+      let spinPhase: string | undefined;
+      let spinRisk: boolean | undefined;
+      try {
+        const raw = event.analysis.conversationStateJson;
+        if (raw && raw !== '{}') {
+          const cs = JSON.parse(raw) as Record<string, unknown>;
+          if (cs && typeof cs === 'object') {
+            if (cs.alerta_risco_spin === true) {
+              severity = 'warning';
+            }
+            if (typeof cs.fase_spin === 'string') {
+              spinPhase = cs.fase_spin;
+            }
+            if (typeof cs.alerta_risco_spin === 'boolean') {
+              spinRisk = cs.alerta_risco_spin;
+            }
+          }
+        }
+      } catch {
+        // ignore malformed JSON; keep defaults
+      }
+
       // Passa a bola para o FeedbackService que orquestra a persistencia DB
       // e consequentemente emite o broadcast de WebSockets via Gateway
       await this.feedbackService.createFeedback({
         meetingId: event.meetingId,
         participantId: event.participantId,
         type: 'llm_insight' as any,
-        severity: 'info' as any,
+        severity: severity as any,
         ts: event.timestamp,
         windowStart: event.windowStart,
         windowEnd: event.windowEnd,
         message: event.analysis.directFeedback,
         metadata: {
           conversationStateJson: event.analysis.conversationStateJson,
+          ...(spinPhase !== undefined ? { spinPhase } : {}),
+          ...(spinRisk !== undefined ? { spinRisk } : {}),
         },
       });
     } catch (error) {
