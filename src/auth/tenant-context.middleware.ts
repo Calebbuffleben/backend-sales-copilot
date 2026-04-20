@@ -48,6 +48,7 @@ export class TenantContextMiddleware implements NestMiddleware {
       ctx = Object.freeze({
         userId: claims.sub,
         tenantId: claims.tid,
+        membershipId: claims.mid ?? null,
         role: claims.role,
         jti: claims.jti,
       });

@@ -5,8 +5,8 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { UserRole } from '@prisma/client';
 import { ROLES_KEY } from '../auth.constants';
+import type { TokenRole } from '../role.types';
 import type { TenantContext } from '../../tenancy/tenant-context.types';
 
 @Injectable()
@@ -15,7 +15,7 @@ export class RolesGuard implements CanActivate {
 
   canActivate(ctx: ExecutionContext): boolean {
     if (ctx.getType() !== 'http') return true;
-    const required = this.reflector.getAllAndOverride<UserRole[] | undefined>(
+    const required = this.reflector.getAllAndOverride<TokenRole[] | undefined>(
       ROLES_KEY,
       [ctx.getHandler(), ctx.getClass()],
     );

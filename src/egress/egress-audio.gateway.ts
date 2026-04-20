@@ -84,7 +84,8 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
           ctx = Object.freeze({
             userId: claims.sub,
             tenantId: claims.tid,
-            role: claims.role as TenantContext['role'],
+            membershipId: claims.mid ?? null,
+            role: claims.role,
             jti: claims.jti,
           });
         } catch (err) {

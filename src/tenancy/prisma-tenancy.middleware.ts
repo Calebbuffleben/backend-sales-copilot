@@ -12,11 +12,16 @@ import type { TenantContextService } from './tenant-context.service';
  * socket/WS/gRPC scopes, where ALS is intentionally NOT populated).
  */
 const TENANT_SCOPED_MODELS = new Set<string>([
-  'User',
+  // NOTE: `User` is intentionally excluded. Users are global identities —
+  // a single email can be a member of many tenants. Tenant isolation for
+  // user-related data is enforced via `Membership` (which IS scoped).
   'Session',
   'FeedbackEvent',
   'RefreshToken',
   'AuditLog',
+  'Membership',
+  'Invitation',
+  'Subscription',
 ]);
 
 const WHERE_OPS = new Set<string>([

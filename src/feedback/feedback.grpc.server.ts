@@ -107,6 +107,7 @@ export class FeedbackGrpcServer {
       const ctx: TenantContext = Object.freeze({
         userId: claims.sub,
         tenantId: claimedTenantId,
+        membershipId: null,
         role: 'SERVICE',
         jti: claims.jti,
         isService: true,
@@ -117,6 +118,7 @@ export class FeedbackGrpcServer {
     const ctx: TenantContext = Object.freeze({
       userId: claims.sub,
       tenantId: claims.tid,
+      membershipId: claims.mid ?? null,
       role: claims.role,
       jti: claims.jti,
       isService: claims.type === 'service',

@@ -13,7 +13,12 @@ import {
 describe('TenantContextService (HTTP ALS)', () => {
   it('binds tenant context only inside runHttp', () => {
     const svc = new TenantContextService();
-    const ctx: TenantContext = { userId: 'u1', tenantId: 't1', role: 'MEMBER' };
+    const ctx: TenantContext = {
+      userId: 'u1',
+      tenantId: 't1',
+      membershipId: 'm1',
+      role: 'MEMBER',
+    };
     expect(svc.getHttpContext()).toBeUndefined();
     svc.runHttp(ctx, () => {
       expect(svc.getHttpContext()).toEqual(ctx);
@@ -41,7 +46,12 @@ describe('tenant helpers', () => {
   });
 
   it('runWithTenant threads context into the callback (no ALS)', () => {
-    const ctx: TenantContext = { userId: 'u1', tenantId: 't1', role: 'MEMBER' };
+    const ctx: TenantContext = {
+      userId: 'u1',
+      tenantId: 't1',
+      membershipId: 'm1',
+      role: 'MEMBER',
+    };
     const received = runWithTenant(ctx, (c) => c.tenantId);
     expect(received).toBe('t1');
   });

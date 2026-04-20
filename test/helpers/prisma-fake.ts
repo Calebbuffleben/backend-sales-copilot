@@ -1,14 +1,16 @@
 /**
  * In-memory PrismaService stand-in for e2e tests.
  *
- * Implements the tiny slice of Prisma used by AuthService + FeedbackService —
- * enough to exercise the full HTTP/auth stack without a real Postgres. This
- * is intentionally narrow: if you touch a new Prisma call path in a test,
- * add it here explicitly so we stay fail-loud.
+ * Implements the slice of Prisma used by AuthService, MembersService,
+ * InvitationsService, BillingService and FeedbackService — enough to
+ * exercise the full HTTP/auth/membership stack without a real Postgres.
+ *
+ * This is intentionally narrow: if you touch a new Prisma call path in
+ * a test, add it here explicitly so we stay fail-loud.
  *
  * NOTE: signatures mimic Prisma's delegate shape (`findUnique`, `create`, …)
- * but cut corners on select/include — we return full objects and let the
- * test assert the fields it cares about.
+ * but cut corners on select/include — we return full objects (plus a
+ * `user` nested object where Membership.findMany/change-role need it).
  */
 
 type Id = string;
@@ -24,13 +26,46 @@ interface TenantRow {
 
 interface UserRow {
   id: Id;
-  tenantId: Id;
   email: string;
   passwordHash: string | null;
   name: string | null;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER' | 'SERVICE';
   isActive: boolean;
   lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface MembershipRow {
+  id: Id;
+  userId: Id;
+  tenantId: Id;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  invitedBy: Id | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface InvitationRow {
+  id: Id;
+  tenantId: Id;
+  email: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  tokenHash: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED';
+  invitedById: Id;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface SubscriptionRow {
+  id: Id;
+  tenantId: Id;
+  plan: 'FREE' | 'PRO' | 'ENTERPRISE';
+  maxUsers: number;
+  status: 'ACTIVE' | 'CANCELED' | 'PAST_DUE';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +74,7 @@ interface RefreshTokenRow {
   id: Id;
   tenantId: Id;
   userId: Id;
+  membershipId: Id | null;
   tokenHash: string;
   familyId: Id;
   expiresAt: Date;
@@ -116,10 +152,10 @@ function matchWhere<T extends Record<string, any>>(
       if (gte && !(row[key] >= gte)) return false;
       continue;
     }
-    if (key === 'tenantId_email' && value && typeof value === 'object') {
+    if (key === 'userId_tenantId' && value && typeof value === 'object') {
       if (
-        row.tenantId !== (value as any).tenantId ||
-        row.email !== (value as any).email
+        row.userId !== (value as any).userId ||
+        row.tenantId !== (value as any).tenantId
       ) {
         return false;
       }
@@ -138,25 +174,22 @@ function matchWhere<T extends Record<string, any>>(
 export function createInMemoryPrismaFake() {
   const tenants: TenantRow[] = [];
   const users: UserRow[] = [];
+  const memberships: MembershipRow[] = [];
+  const invitations: InvitationRow[] = [];
+  const subscriptions: SubscriptionRow[] = [];
   const refreshTokens: RefreshTokenRow[] = [];
   const auditLogs: AuditLogRow[] = [];
   const feedbackEvents: FeedbackEventRow[] = [];
 
   const api = {
-    // -------------------------- lifecycle ------------------------------ //
     async $connect() {},
     async $disconnect() {},
-    $use(_mw: unknown) {
-      // Intentionally no-op: the tenancy middleware relies on ALS which we
-      // don't want to apply here — tests directly drive the controllers.
-    },
+    $use(_mw: unknown) {},
 
     // -------------------------- Tenant -------------------------------- //
     tenant: {
       async findUnique({ where }: any) {
-        return (
-          tenants.find((t) => matchWhere(t, where)) ?? null
-        );
+        return tenants.find((t) => matchWhere(t, where)) ?? null;
       },
       async create({ data }: any) {
         const row: TenantRow = {
@@ -174,17 +207,14 @@ export function createInMemoryPrismaFake() {
 
     // -------------------------- User ---------------------------------- //
     user: {
-      async findUnique({ where }: any) {
-        if (where?.tenantId_email) {
-          return (
-            users.find(
-              (u) =>
-                u.tenantId === where.tenantId_email.tenantId &&
-                u.email === where.tenantId_email.email,
-            ) ?? null
-          );
+      async findUnique({ where, select }: any) {
+        const row = users.find((u) => matchWhere(u, where)) ?? null;
+        if (!row || !select) return row;
+        const out: any = {};
+        for (const k of Object.keys(select)) {
+          if (select[k]) out[k] = (row as any)[k];
         }
-        return users.find((u) => matchWhere(u, where)) ?? null;
+        return out;
       },
       async count({ where }: any) {
         return users.filter((u) => matchWhere(u, where)).length;
@@ -192,11 +222,9 @@ export function createInMemoryPrismaFake() {
       async create({ data }: any) {
         const row: UserRow = {
           id: uid('usr_'),
-          tenantId: data.tenantId,
           email: data.email,
           passwordHash: data.passwordHash ?? null,
           name: data.name ?? null,
-          role: data.role ?? 'MEMBER',
           isActive: data.isActive ?? true,
           lastLoginAt: null,
           createdAt: new Date(),
@@ -213,18 +241,155 @@ export function createInMemoryPrismaFake() {
       },
     },
 
+    // -------------------------- Membership ---------------------------- //
+    membership: {
+      async findUnique({ where, include }: any) {
+        const row = memberships.find((m) => matchWhere(m, where)) ?? null;
+        if (!row) return null;
+        if (include?.user) {
+          const user = users.find((u) => u.id === row.userId) ?? null;
+          return { ...row, user };
+        }
+        return row;
+      },
+      async findFirst({ where }: any) {
+        return memberships.find((m) => matchWhere(m, where)) ?? null;
+      },
+      async findMany({ where, include, orderBy }: any) {
+        let rows = memberships.filter((m) => matchWhere(m, where));
+        if (orderBy?.createdAt === 'asc') {
+          rows = rows.slice().sort(
+            (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+          );
+        }
+        if (include?.user) {
+          return rows.map((r) => ({
+            ...r,
+            user: users.find((u) => u.id === r.userId) ?? null,
+          }));
+        }
+        return rows;
+      },
+      async count({ where }: any) {
+        return memberships.filter((m) => matchWhere(m, where)).length;
+      },
+      async create({ data, include }: any) {
+        const row: MembershipRow = {
+          id: uid('mbr_'),
+          userId: data.userId,
+          tenantId: data.tenantId,
+          role: data.role ?? 'MEMBER',
+          invitedBy: data.invitedBy ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        memberships.push(row);
+        if (include?.user) {
+          return { ...row, user: users.find((u) => u.id === row.userId) ?? null };
+        }
+        return row;
+      },
+      async update({ where, data, include }: any) {
+        const idx = memberships.findIndex((m) => matchWhere(m, where));
+        if (idx < 0) throw new Error('membership not found');
+        memberships[idx] = { ...memberships[idx], ...data, updatedAt: new Date() };
+        const row = memberships[idx];
+        if (include?.user) {
+          return { ...row, user: users.find((u) => u.id === row.userId) ?? null };
+        }
+        return row;
+      },
+      async delete({ where }: any) {
+        const idx = memberships.findIndex((m) => matchWhere(m, where));
+        if (idx < 0) throw new Error('membership not found');
+        const [removed] = memberships.splice(idx, 1);
+        return removed;
+      },
+    },
+
+    // -------------------------- Invitation ---------------------------- //
+    invitation: {
+      async findUnique({ where }: any) {
+        return invitations.find((i) => matchWhere(i, where)) ?? null;
+      },
+      async findFirst({ where }: any) {
+        return invitations.find((i) => matchWhere(i, where)) ?? null;
+      },
+      async findMany({ where, orderBy }: any) {
+        let rows = invitations.filter((i) => matchWhere(i, where));
+        if (orderBy?.createdAt === 'desc') {
+          rows = rows.slice().sort(
+            (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+          );
+        }
+        return rows;
+      },
+      async count({ where }: any) {
+        return invitations.filter((i) => matchWhere(i, where)).length;
+      },
+      async create({ data }: any) {
+        const row: InvitationRow = {
+          id: uid('inv_'),
+          tenantId: data.tenantId,
+          email: data.email,
+          role: data.role ?? 'MEMBER',
+          tokenHash: data.tokenHash,
+          status: data.status ?? 'PENDING',
+          invitedById: data.invitedById,
+          expiresAt: data.expiresAt,
+          acceptedAt: data.acceptedAt ?? null,
+          revokedAt: data.revokedAt ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        invitations.push(row);
+        return row;
+      },
+      async update({ where, data }: any) {
+        const idx = invitations.findIndex((i) => matchWhere(i, where));
+        if (idx < 0) throw new Error('invitation not found');
+        invitations[idx] = { ...invitations[idx], ...data, updatedAt: new Date() };
+        return invitations[idx];
+      },
+    },
+
+    // -------------------------- Subscription -------------------------- //
+    subscription: {
+      async findUnique({ where }: any) {
+        return subscriptions.find((s) => matchWhere(s, where)) ?? null;
+      },
+      async create({ data }: any) {
+        const row: SubscriptionRow = {
+          id: uid('sub_'),
+          tenantId: data.tenantId,
+          plan: data.plan ?? 'FREE',
+          maxUsers: data.maxUsers ?? 3,
+          status: data.status ?? 'ACTIVE',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        subscriptions.push(row);
+        return row;
+      },
+      async update({ where, data }: any) {
+        const idx = subscriptions.findIndex((s) => matchWhere(s, where));
+        if (idx < 0) throw new Error('subscription not found');
+        subscriptions[idx] = { ...subscriptions[idx], ...data, updatedAt: new Date() };
+        return subscriptions[idx];
+      },
+    },
+
     // -------------------------- RefreshToken -------------------------- //
     refreshToken: {
       async findUnique({ where }: any) {
-        return (
-          refreshTokens.find((r) => matchWhere(r, where)) ?? null
-        );
+        return refreshTokens.find((r) => matchWhere(r, where)) ?? null;
       },
       async create({ data }: any) {
         const row: RefreshTokenRow = {
           id: data.id ?? uid('rt_'),
           tenantId: data.tenantId,
           userId: data.userId,
+          membershipId: data.membershipId ?? null,
           tokenHash: data.tokenHash,
           familyId: data.familyId,
           expiresAt: data.expiresAt,
@@ -332,9 +497,11 @@ export function createInMemoryPrismaFake() {
       },
     },
 
-    // -------------------------- test escape hatches ------------------- //
     _dumpTenants: () => tenants.slice(),
     _dumpUsers: () => users.slice(),
+    _dumpMemberships: () => memberships.slice(),
+    _dumpInvitations: () => invitations.slice(),
+    _dumpSubscriptions: () => subscriptions.slice(),
     _dumpRefreshTokens: () => refreshTokens.slice(),
     _dumpAuditLogs: () => auditLogs.slice(),
     _dumpFeedbackEvents: () => feedbackEvents.slice(),

@@ -7,10 +7,10 @@ import {
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import type { FeedbackSeverity, FeedbackType, UserRole } from '@prisma/client';
+import type { FeedbackSeverity, FeedbackType } from '@prisma/client';
 import { FeedbackService } from './feedback.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import type { TenantContext } from '../tenancy/tenant-context.types';
 
 @Controller('feedback')
@@ -27,7 +27,7 @@ export class FeedbackController {
   }
 
   @Post('test/emit')
-  @Roles('OWNER' as UserRole, 'ADMIN' as UserRole)
+  @AdminOnly()
   async emitSyntheticFeedback(
     @Body()
     payload: {

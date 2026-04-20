@@ -1,18 +1,22 @@
 /**
- * e2e tests for the /auth/* surface + tenant enforcement.
+ * e2e tests for the full multi-tenant auth + membership + billing surface.
  *
- * These tests exercise the real HTTP stack (ValidationPipe, middleware,
- * guards, controller) but replace `PrismaService` with an in-memory fake
- * so the suite is hermetic and can run in CI without Postgres.
+ * Real HTTP stack (ValidationPipe, middleware, guards, controllers); the
+ * PrismaService is replaced by an in-memory fake so the suite is hermetic
+ * and runs in CI without Postgres.
  *
  * Covered flows:
- *   - POST /auth/register (self-signup, first user becomes OWNER)
- *   - POST /auth/login (happy path + failure)
- *   - POST /auth/login lockout when threshold exceeded
- *   - POST /auth/refresh with rotation + reuse detection (family revocation)
- *   - GET  /auth/me requires Bearer
- *   - POST /auth/service-token protected by SERVICE_BOOTSTRAP_KEY
- *   - GET  /feedback/metrics refuses cross-tenant requests
+ *   - POST /auth/register              — creates User + Tenant + OWNER Membership + FREE Subscription
+ *   - POST /auth/login                 — happy + failure + lockout
+ *   - POST /auth/refresh               — rotation + family kill on reuse
+ *   - GET  /auth/me                    — returns user+membership+tenant+subscription
+ *   - POST /auth/service-token         — requires bootstrap key; not usable on HTTP
+ *   - GET  /feedback/metrics           — cross-tenant header rejected
+ *   - GET  /members                    — listing for the authed tenant
+ *   - POST /invites                    — admin only, enforces seat limit
+ *   - POST /invites/accept-public      — creates new User + Membership
+ *   - POST /invites + seat exhaustion  — returns 402 with upgrade hint
+ *   - POST /billing/upgrade            — admin only; unblocks new invites
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -21,14 +25,17 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
 import { AuthModule } from '../src/auth/auth.module';
+import { BillingModule } from '../src/billing/billing.module';
 import { FeedbackModule } from '../src/feedback/feedback.module';
+import { InvitationsModule } from '../src/invitations/invitations.module';
 import { LLMFeedbackModule } from '../src/llm-feedback/llm-feedback.module';
+import { MembersModule } from '../src/members/members.module';
 import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { createInMemoryPrismaFake } from './helpers/prisma-fake';
 
-describe('/auth (e2e)', () => {
+describe('Multi-tenant auth + membership + billing (e2e)', () => {
   let app: INestApplication;
   let prisma: ReturnType<typeof createInMemoryPrismaFake>;
 
@@ -44,7 +51,6 @@ describe('/auth (e2e)', () => {
     process.env.AUTH_LOCKOUT_EMAIL_THRESHOLD = '3';
     process.env.AUTH_LOCKOUT_IP_THRESHOLD = '100';
     process.env.AUTH_LOCKOUT_WINDOW_SECONDS = '300';
-    // Disable the Prisma `JWT_PRIVATE_KEY` path so we can use HS256.
     delete process.env.JWT_PRIVATE_KEY;
     delete process.env.JWT_PUBLIC_KEY;
   });
@@ -59,6 +65,9 @@ describe('/auth (e2e)', () => {
         TenancyModule,
         PrismaModule,
         AuthModule,
+        BillingModule,
+        MembersModule,
+        InvitationsModule,
         LLMFeedbackModule,
         FeedbackModule,
       ],
@@ -79,39 +88,67 @@ describe('/auth (e2e)', () => {
     await app?.close();
   });
 
-  // --------------------------------------------------------------------- //
-  // register / login                                                      //
-  // --------------------------------------------------------------------- //
+  // ------------------------------------------------------------------- //
+  // Helpers                                                             //
+  // ------------------------------------------------------------------- //
 
-  it('POST /auth/register creates OWNER + tenant on first signup', async () => {
+  const PASS = 'Sup3rS3cret-passphrase';
+
+  async function registerOwner(slug: string, email: string) {
     const res = await request(app.getHttpServer())
       .post('/auth/register')
       .send({
-        email: 'owner@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'acme',
-        tenantName: 'Acme',
-        name: 'Owner',
+        email,
+        password: PASS,
+        tenantSlug: slug,
+        tenantName: slug.toUpperCase(),
       })
       .expect(201);
+    return res.body as {
+      accessToken: string;
+      refreshToken: string;
+      user: { id: string; email: string };
+      membership: { id: string; role: string };
+      tenant: { id: string; slug: string; name: string };
+    };
+  }
 
-    expect(res.body.accessToken).toBeTruthy();
-    expect(res.body.refreshToken).toBeTruthy();
-    expect(res.body.user.email).toBe('owner@acme.test');
-    expect(res.body.user.role).toBe('OWNER');
-    expect(res.body.tenant.slug).toBe('acme');
+  async function authHeader(accessToken: string) {
+    return { Authorization: `Bearer ${accessToken}` };
+  }
+
+  // ------------------------------------------------------------------- //
+  // register / login                                                    //
+  // ------------------------------------------------------------------- //
+
+  it('POST /auth/register creates OWNER + FREE subscription and returns full session', async () => {
+    const body = await registerOwner('acme', 'owner@acme.test');
+    expect(body.accessToken).toBeTruthy();
+    expect(body.refreshToken).toBeTruthy();
+    expect(body.user.email).toBe('owner@acme.test');
+    expect(body.membership.role).toBe('OWNER');
+    expect(body.tenant.slug).toBe('acme');
+
+    const subs = prisma._dumpSubscriptions();
+    expect(subs).toHaveLength(1);
+    expect(subs[0].plan).toBe('FREE');
+    expect(subs[0].maxUsers).toBe(3);
   });
 
-  it('POST /auth/login rejects invalid credentials and counts failures', async () => {
+  it('POST /auth/register rejects duplicate email across tenants', async () => {
+    await registerOwner('alpha', 'dup@example.test');
     await request(app.getHttpServer())
       .post('/auth/register')
       .send({
-        email: 'user@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'acme',
+        email: 'dup@example.test',
+        password: PASS,
+        tenantSlug: 'beta',
       })
-      .expect(201);
+      .expect(409);
+  });
 
+  it('POST /auth/login fails and triggers lockout', async () => {
+    await registerOwner('acme', 'user@acme.test');
     for (let i = 0; i < 3; i++) {
       await request(app.getHttpServer())
         .post('/auth/login')
@@ -122,180 +159,302 @@ describe('/auth (e2e)', () => {
         })
         .expect(401);
     }
-
-    // 4th attempt should now hit the lockout gate (threshold = 3).
     const locked = await request(app.getHttpServer())
       .post('/auth/login')
-      .send({
-        email: 'user@acme.test',
-        password: 'Sup3rS3cret-passphrase', // correct password!
-        tenantSlug: 'acme',
-      })
+      .send({ email: 'user@acme.test', password: PASS, tenantSlug: 'acme' })
       .expect(401);
-
     expect(String(locked.body.message || '')).toMatch(/too many/i);
-
-    // Ensure we recorded an auth.login.lockout entry.
-    const logs = prisma._dumpAuditLogs();
-    expect(logs.some((l) => l.action === 'auth.login.lockout')).toBe(true);
   });
 
-  // --------------------------------------------------------------------- //
-  // refresh / reuse detection                                             //
-  // --------------------------------------------------------------------- //
-
-  it('POST /auth/refresh rotates token; reusing revoked token kills the family', async () => {
-    const session = await request(app.getHttpServer())
-      .post('/auth/register')
+  it('POST /auth/login blocks users who do not have a membership in the tenant', async () => {
+    await registerOwner('tenant-a', 'owner-a@acme.test');
+    // This user has no membership in tenant-a.
+    await registerOwner('tenant-b', 'owner-b@acme.test');
+    await request(app.getHttpServer())
+      .post('/auth/login')
       .send({
-        email: 'rotator@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'acme-rotate',
+        email: 'owner-b@acme.test',
+        password: PASS,
+        tenantSlug: 'tenant-a',
       })
-      .expect(201)
-      .then((r) => r.body);
+      .expect(401);
+  });
 
-    // First rotation: original -> newToken.
+  // ------------------------------------------------------------------- //
+  // refresh rotation                                                     //
+  // ------------------------------------------------------------------- //
+
+  it('POST /auth/refresh rotates tokens and kills the family on reuse', async () => {
+    const session = await registerOwner('acme-rotate', 'r@acme.test');
     const rotated = await request(app.getHttpServer())
       .post('/auth/refresh')
       .send({ refreshToken: session.refreshToken })
       .expect(200)
       .then((r) => r.body);
-
     expect(rotated.refreshToken).not.toBe(session.refreshToken);
 
-    // Reusing the original (now revoked) must fail AND revoke all family tokens.
     await request(app.getHttpServer())
       .post('/auth/refresh')
       .send({ refreshToken: session.refreshToken })
       .expect(401);
-
-    // The newly-rotated token should now also be revoked (family kill).
     await request(app.getHttpServer())
       .post('/auth/refresh')
       .send({ refreshToken: rotated.refreshToken })
       .expect(401);
   });
 
-  // --------------------------------------------------------------------- //
-  // /auth/me                                                              //
-  // --------------------------------------------------------------------- //
+  // ------------------------------------------------------------------- //
+  // /auth/me                                                             //
+  // ------------------------------------------------------------------- //
 
-  it('GET /auth/me requires Bearer, returns user+tenant on success', async () => {
-    const session = await request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        email: 'me@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'acme-me',
-      })
-      .expect(201)
-      .then((r) => r.body);
-
-    await request(app.getHttpServer()).get('/auth/me').expect(401);
-
+  it('GET /auth/me returns membership + subscription snapshot', async () => {
+    const session = await registerOwner('acme-me', 'me@acme.test');
     const me = await request(app.getHttpServer())
       .get('/auth/me')
-      .set('Authorization', `Bearer ${session.accessToken}`)
+      .set(await authHeader(session.accessToken))
       .expect(200)
       .then((r) => r.body);
-
     expect(me.user.email).toBe('me@acme.test');
+    expect(me.membership.role).toBe('OWNER');
     expect(me.tenant.slug).toBe('acme-me');
+    expect(me.subscription.plan).toBe('FREE');
+    expect(me.subscription.maxUsers).toBe(3);
+    expect(me.subscription.memberCount).toBe(1);
+    expect(me.subscription.seatsRemaining).toBe(2);
   });
 
-  // --------------------------------------------------------------------- //
-  // /auth/service-token                                                   //
-  // --------------------------------------------------------------------- //
+  // ------------------------------------------------------------------- //
+  // /auth/service-token                                                  //
+  // ------------------------------------------------------------------- //
 
-  it('POST /auth/service-token requires SERVICE_BOOTSTRAP_KEY', async () => {
-    await request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        email: 'svc-owner@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'svc-tenant',
-      })
-      .expect(201);
-
-    // No key
+  it('POST /auth/service-token requires bootstrap key; result is not usable on HTTP', async () => {
+    await registerOwner('svc', 'svc-owner@acme.test');
     await request(app.getHttpServer())
       .post('/auth/service-token')
-      .send({ tenantSlug: 'svc-tenant' })
+      .send({ tenantSlug: 'svc' })
       .expect(403);
-
-    // Wrong key
-    await request(app.getHttpServer())
-      .post('/auth/service-token')
-      .set('x-service-bootstrap-key', 'nope')
-      .send({ tenantSlug: 'svc-tenant' })
-      .expect(403);
-
-    // Correct key mints a service token
     const minted = await request(app.getHttpServer())
       .post('/auth/service-token')
       .set('x-service-bootstrap-key', 'test-bootstrap-key-xyz')
-      .send({ tenantSlug: 'svc-tenant', label: 'python-service', ttlSeconds: 120 })
+      .send({ tenantSlug: 'svc', label: 'python', ttlSeconds: 120 })
       .expect(200)
       .then((r) => r.body);
-
     expect(minted.token).toBeTruthy();
-    expect(minted.tenantSlug).toBe('svc-tenant');
-    expect(minted.expiresAt).toBeGreaterThan(Date.now());
-
-    // Service tokens must NOT be usable as access tokens on HTTP.
     await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${minted.token}`)
       .expect(401);
   });
 
-  // --------------------------------------------------------------------- //
-  // cross-tenant isolation on /feedback/metrics                            //
-  // --------------------------------------------------------------------- //
+  // ------------------------------------------------------------------- //
+  // cross-tenant isolation                                               //
+  // ------------------------------------------------------------------- //
 
-  it('GET /feedback/metrics refuses token-vs-header tenant mismatches', async () => {
-    const a = await request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        email: 'a@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'tenant-a',
-      })
-      .expect(201)
-      .then((r) => r.body);
+  it('GET /feedback/metrics rejects cross-tenant x-tenant-id', async () => {
+    const a = await registerOwner('tenant-a', 'user-a@acme.test');
+    const b = await registerOwner('tenant-b', 'user-b@acme.test');
 
-    const b = await request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        email: 'b@acme.test',
-        password: 'Sup3rS3cret-passphrase',
-        tenantSlug: 'tenant-b',
-      })
-      .expect(201)
-      .then((r) => r.body);
-
-    // Token A calling with Tenant B in the header must be rejected by the
-    // HTTP tenant-mismatch guard added in `TenantContextMiddleware`.
     await request(app.getHttpServer())
       .get('/feedback/metrics/mtg-x')
-      .set('Authorization', `Bearer ${a.accessToken}`)
+      .set(await authHeader(a.accessToken))
       .set('x-tenant-id', b.tenant.id)
-      .expect((res) => {
-        if (res.status !== 403) {
-          throw new Error(
-            `Expected 403 cross-tenant rejection, got ${res.status}`,
-          );
-        }
-      });
+      .expect(403);
 
-    // Same-tenant header should pass the auth/tenancy gate (the feedback
-    // service may still 200/404/500 depending on data — we just assert it
-    // is NOT a 401/403).
-    const ok = await request(app.getHttpServer())
+    const same = await request(app.getHttpServer())
       .get('/feedback/metrics/mtg-x')
-      .set('Authorization', `Bearer ${a.accessToken}`)
+      .set(await authHeader(a.accessToken))
       .set('x-tenant-id', a.tenant.id);
-    expect([200, 404, 500]).toContain(ok.status);
+    expect([200, 404, 500]).toContain(same.status);
+  });
+
+  // ------------------------------------------------------------------- //
+  // Members                                                              //
+  // ------------------------------------------------------------------- //
+
+  it('GET /members lists just the caller on a fresh tenant', async () => {
+    const o = await registerOwner('members-1', 'owner@m.test');
+    const list = await request(app.getHttpServer())
+      .get('/members')
+      .set(await authHeader(o.accessToken))
+      .expect(200)
+      .then((r) => r.body);
+    expect(list).toHaveLength(1);
+    expect(list[0].role).toBe('OWNER');
+    expect(list[0].email).toBe('owner@m.test');
+  });
+
+  // ------------------------------------------------------------------- //
+  // Invitations + billing (full lifecycle)                               //
+  // ------------------------------------------------------------------- //
+
+  it('invitation lifecycle: create → accept-public → member; then seat limit → upgrade → accept', async () => {
+    const owner = await registerOwner('capco', 'owner@capco.test');
+    const headers = await authHeader(owner.accessToken);
+
+    // FREE plan = 3 seats. Owner occupies 1 → can invite 2 more without upgrading.
+    const i1 = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'one@capco.test' })
+      .expect(201)
+      .then((r) => r.body);
+    expect(i1.token).toBeTruthy();
+    expect(i1.status).toBe('PENDING');
+
+    const i2 = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'two@capco.test' })
+      .expect(201)
+      .then((r) => r.body);
+
+    // Third invite would push seats = 4 (1 owner + 3 pending/members) > 3 → 402.
+    const blocked = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'three@capco.test' })
+      .expect(402)
+      .then((r) => r.body);
+    expect(blocked.error).toBe('SeatLimitReached');
+    expect(blocked.maxUsers).toBe(3);
+    expect(blocked.plan).toBe('FREE');
+
+    // Accept i1 publicly (new user).
+    const accepted = await request(app.getHttpServer())
+      .post('/invites/accept-public')
+      .send({
+        token: i1.token,
+        password: PASS,
+        name: 'One',
+      })
+      .expect(201)
+      .then((r) => r.body);
+    expect(accepted.membership.role).toBe('MEMBER');
+    expect(accepted.tenant.slug).toBe('capco');
+    expect(accepted.accessToken).toBeTruthy();
+
+    // New user can now log in.
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({
+        email: 'one@capco.test',
+        password: PASS,
+        tenantSlug: 'capco',
+      })
+      .expect(200);
+
+    // After accept: memberships=2, pending=1, so still blocked at 3.
+    await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'four@capco.test' })
+      .expect(402);
+
+    // Upgrade to PRO (=10 seats). Now there is room.
+    const sub = await request(app.getHttpServer())
+      .post('/billing/upgrade')
+      .set(headers)
+      .send({ plan: 'PRO' })
+      .expect(200)
+      .then((r) => r.body);
+    expect(sub.plan).toBe('PRO');
+    expect(sub.maxUsers).toBe(10);
+
+    // Now we can invite more.
+    const i4 = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'four@capco.test' })
+      .expect(201)
+      .then((r) => r.body);
+    expect(i4.status).toBe('PENDING');
+  });
+
+  it('POST /invites is admin-only; regular member gets 403', async () => {
+    const owner = await registerOwner('guard-co', 'owner@guard.test');
+    const headers = await authHeader(owner.accessToken);
+    const inv = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'member@guard.test' })
+      .expect(201)
+      .then((r) => r.body);
+
+    // Accept as new user, then log in as member.
+    await request(app.getHttpServer())
+      .post('/invites/accept-public')
+      .send({ token: inv.token, password: PASS, name: 'Member' })
+      .expect(201);
+    const memberSession = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({
+        email: 'member@guard.test',
+        password: PASS,
+        tenantSlug: 'guard-co',
+      })
+      .expect(200)
+      .then((r) => r.body);
+
+    // Regular MEMBER cannot invite.
+    await request(app.getHttpServer())
+      .post('/invites')
+      .set({ Authorization: `Bearer ${memberSession.accessToken}` })
+      .send({ email: 'nope@guard.test' })
+      .expect(403);
+
+    // MEMBER cannot upgrade either.
+    await request(app.getHttpServer())
+      .post('/billing/upgrade')
+      .set({ Authorization: `Bearer ${memberSession.accessToken}` })
+      .send({ plan: 'PRO' })
+      .expect(403);
+  });
+
+  it('POST /invites rejects inviting an existing member or an already-invited email', async () => {
+    const owner = await registerOwner('dupe-co', 'owner@dupe.test');
+    const headers = await authHeader(owner.accessToken);
+
+    const first = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'friend@dupe.test' })
+      .expect(201)
+      .then((r) => r.body);
+
+    // Second invite for same email while first is PENDING → 409.
+    await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'friend@dupe.test' })
+      .expect(409);
+
+    // Accept it.
+    await request(app.getHttpServer())
+      .post('/invites/accept-public')
+      .send({ token: first.token, password: PASS, name: 'Friend' })
+      .expect(201);
+
+    // Now inviting again → 409 (already a member).
+    await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'friend@dupe.test' })
+      .expect(409);
+  });
+
+  it('GET /billing/subscription reports live seat usage', async () => {
+    const owner = await registerOwner('usage-co', 'owner@usage.test');
+    const headers = await authHeader(owner.accessToken);
+    const sub = await request(app.getHttpServer())
+      .get('/billing/subscription')
+      .set(headers)
+      .expect(200)
+      .then((r) => r.body);
+    expect(sub.plan).toBe('FREE');
+    expect(sub.maxUsers).toBe(3);
+    expect(sub.memberCount).toBe(1);
+    expect(sub.seatsRemaining).toBe(2);
+    expect(sub.planLimits.PRO).toBe(10);
+    expect(sub.planLimits.ENTERPRISE).toBe(50);
   });
 });

@@ -70,6 +70,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const token = jwt.sign({
       subject: 'user-1',
       tenantId: 'tenant-1',
+      membershipId: 'm-1',
       role: 'MEMBER',
       jti: 'jti-1',
       type: 'access',
@@ -90,6 +91,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const token = jwt.sign({
       subject: 'user-1',
       tenantId: 'tenant-1',
+      membershipId: 'm-1',
       role: 'MEMBER',
       jti: 'jti-1',
       type: 'access',
@@ -107,6 +109,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const token = jwt.sign({
       subject: 'user-1',
       tenantId: 'tenant-1',
+      membershipId: 'm-1',
       role: 'MEMBER',
       jti: 'jti-1',
       type: 'access',
@@ -154,6 +157,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const refresh = jwt.sign({
       subject: 'u',
       tenantId: 't',
+      membershipId: 'm',
       role: 'MEMBER',
       jti: 'j',
       type: 'refresh',

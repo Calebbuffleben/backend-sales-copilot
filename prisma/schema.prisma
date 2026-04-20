@@ -12,12 +12,50 @@ datasource db {
 
 // ---------------------------------------------------------------------------
 // Multi-tenant core
+//
+// Identity model (non-negotiable):
+//  - `User` is a GLOBAL identity. Email is unique across the platform.
+//  - `Tenant` is a company/workspace.
+//  - `Membership` links a User to a Tenant with a role. A user can belong
+//    to many tenants and a tenant can have many users.
+//  - `Subscription` is the billing record per tenant (plan + seat limit).
+//  - `Invitation` is a pending link (tokenized) that becomes a Membership
+//    when the invitee accepts.
+//
+// The JWT access token carries `sub` (userId), `tid` (tenantId) and `mid`
+// (membershipId). The `mid` is the authoritative permission anchor — the
+// backend rechecks it on every protected request.
 // ---------------------------------------------------------------------------
 
 enum TenantStatus {
   ACTIVE
   SUSPENDED
   DELETED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
 }
 
 model Tenant {
@@ -28,36 +66,79 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  users           User[]
-  sessions        Session[]
-  feedbackEvents  FeedbackEvent[]
-  refreshTokens   RefreshToken[]
-  auditLogs       AuditLog[]
-}
-
-enum UserRole {
-  OWNER
-  ADMIN
-  MEMBER
-  SERVICE
+  memberships    Membership[]
+  invitations    Invitation[]
+  subscription   Subscription?
+  sessions       Session[]
+  feedbackEvents FeedbackEvent[]
+  refreshTokens  RefreshToken[]
+  auditLogs      AuditLog[]
 }
 
 model User {
   id           String    @id @default(uuid())
-  tenantId     String
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  email        String
+  email        String    @unique
   passwordHash String?
   name         String?
-  role         UserRole  @default(MEMBER)
   isActive     Boolean   @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  memberships   Membership[]
   refreshTokens RefreshToken[]
+  sentInvites   Invitation[]   @relation("InvitationInvitedBy")
+}
 
-  @@unique([tenantId, email])
+model Membership {
+  id        String         @id @default(uuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId  String
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      MembershipRole @default(MEMBER)
+  // Null when OWNER created the tenant; otherwise the membership that invited them.
+  invitedBy String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model Invitation {
+  id          String         @id @default(uuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email       String
+  role        MembershipRole @default(MEMBER)
+  // sha256(tokenPlaintext) — plaintext is returned to the admin ONCE.
+  tokenHash   String         @unique
+  status      InviteStatus   @default(PENDING)
+  invitedById String
+  invitedBy   User           @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, email])
+  @@index([expiresAt])
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  tenantId  String             @unique
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan      Plan               @default(FREE)
+  maxUsers  Int                @default(3)
+  status    SubscriptionStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
   @@index([tenantId])
 }
 
@@ -67,6 +148,10 @@ model RefreshToken {
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId       String
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Membership that minted this token. Used to short-circuit revoke when a
+  // membership is removed (admin removes a user) and as an extra sanity
+  // anchor during refresh (we re-verify the membership still exists).
+  membershipId String?
   tokenHash    String    @unique
   familyId     String
   expiresAt    DateTime

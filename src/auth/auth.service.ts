@@ -5,9 +5,14 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import * as argon2 from 'argon2';
-import { TenantStatus, UserRole } from '@prisma/client';
+import {
+  MembershipRole,
+  Plan,
+  SubscriptionStatus,
+  TenantStatus,
+} from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
@@ -18,6 +23,8 @@ import {
   DEFAULT_REFRESH_TTL_SECONDS,
   DEFAULT_SERVICE_TTL_SECONDS,
 } from './auth.constants';
+import { planToMaxUsers } from '../billing/plan-limits';
+import type { TokenRole } from './role.types';
 import {
   LoginDto,
   RefreshDto,
@@ -36,10 +43,13 @@ export interface AuthTokens {
 export interface AuthSession extends AuthTokens {
   user: {
     id: string;
-    tenantId: string;
     email: string;
     name: string | null;
-    role: UserRole;
+  };
+  membership: {
+    id: string;
+    tenantId: string;
+    role: MembershipRole;
   };
   tenant: {
     id: string;
@@ -51,6 +61,13 @@ export interface AuthSession extends AuthTokens {
 interface RequestMeta {
   ip?: string;
   userAgent?: string;
+}
+
+interface IssueTokenSubject {
+  userId: string;
+  tenantId: string;
+  membershipId: string;
+  role: MembershipRole;
 }
 
 @Injectable()
@@ -86,6 +103,18 @@ export class AuthService {
     this.lockoutIpThreshold = numFromEnv('AUTH_LOCKOUT_IP_THRESHOLD', 20);
   }
 
+  /**
+   * Brand-new account flow:
+   *
+   *   1. Creates a global User (email must be unused across the platform).
+   *   2. Creates the Tenant (slug must be unique).
+   *   3. Creates the OWNER Membership.
+   *   4. Creates a FREE Subscription with `maxUsers = 3`.
+   *   5. Issues access+refresh tokens scoped to the new membership.
+   *
+   * To add an existing user to another tenant, use the invitation flow
+   * instead (`POST /invites` + `POST /invites/accept`).
+   */
   async register(dto: RegisterDto, meta: RequestMeta): Promise<AuthSession> {
     if (!this.allowSelfSignup) {
       throw new UnauthorizedException(
@@ -98,55 +127,78 @@ export class AuthService {
     return this.tenantCtx.runWithTenantBypass(async () => {
       const passwordHash = await argon2.hash(dto.password, ARGON2_OPTIONS);
 
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email },
+      });
+      if (existingUser) {
+        throw new ConflictException(
+          'Email already registered — log in and ask an admin to invite you to a new tenant.',
+        );
+      }
+
       const existingTenant = await this.prisma.tenant.findUnique({
         where: { slug: tenantSlug },
       });
-
-      // First registration for a tenant creates OWNER; subsequent ones become MEMBER.
-      let tenant = existingTenant;
-      if (!tenant) {
-        tenant = await this.prisma.tenant.create({
-          data: {
-            slug: tenantSlug,
-            name: dto.tenantName?.trim() || tenantSlug,
-            status: TenantStatus.ACTIVE,
-          },
-        });
+      if (existingTenant) {
+        throw new ConflictException('Tenant slug already taken');
       }
 
-      const existingUser = await this.prisma.user.findUnique({
-        where: { tenantId_email: { tenantId: tenant.id, email } },
-      });
-      if (existingUser) {
-        throw new ConflictException('Email already registered for this tenant');
-      }
-
-      const memberCount = await this.prisma.user.count({
-        where: { tenantId: tenant.id },
-      });
-      const role: UserRole = memberCount === 0 ? UserRole.OWNER : UserRole.MEMBER;
-
+      // Create the user first so we can wire FKs without null juggling.
       const user = await this.prisma.user.create({
         data: {
-          tenantId: tenant.id,
           email,
           passwordHash,
           name: dto.name?.trim() || null,
-          role,
           isActive: true,
         },
       });
 
-      await this.writeAuditLog(tenant.id, user.id, 'auth.register', meta);
+      const tenant = await this.prisma.tenant.create({
+        data: {
+          slug: tenantSlug,
+          name: dto.tenantName?.trim() || tenantSlug,
+          status: TenantStatus.ACTIVE,
+        },
+      });
+
+      const membership = await this.prisma.membership.create({
+        data: {
+          userId: user.id,
+          tenantId: tenant.id,
+          role: MembershipRole.OWNER,
+        },
+      });
+
+      // Bootstrap subscription. FREE plan => 3 seats. The creator (OWNER)
+      // already takes one of those seats.
+      await this.prisma.subscription.create({
+        data: {
+          tenantId: tenant.id,
+          plan: Plan.FREE,
+          maxUsers: planToMaxUsers(Plan.FREE),
+          status: SubscriptionStatus.ACTIVE,
+        },
+      });
+
+      await this.writeAuditLog(tenant.id, user.id, 'auth.register', meta, {
+        membershipId: membership.id,
+        role: membership.role,
+      });
 
       const tokens = await this.issueTokens(
-        { userId: user.id, tenantId: tenant.id, role: user.role },
+        {
+          userId: user.id,
+          tenantId: tenant.id,
+          membershipId: membership.id,
+          role: membership.role,
+        },
         meta,
       );
 
       return this.toSession(
         tokens,
-        { id: user.id, email: user.email, name: user.name, role: user.role },
+        { id: user.id, email: user.email, name: user.name },
+        { id: membership.id, tenantId: tenant.id, role: membership.role },
         { id: tenant.id, slug: tenant.slug, name: tenant.name },
       );
     });
@@ -164,10 +216,7 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
-      // --- Lockout gate (complements per-route rate limit) ---
-      // Count failed attempts over the sliding window and block when the
-      // per-email or per-IP threshold is reached. Resets on successful
-      // login below.
+      // Lockout gate (per-email in this tenant AND per-IP).
       const locked = await this.isLoginLocked(tenant.id, email, meta.ip);
       if (locked) {
         await this.writeAuditLog(tenant.id, null, 'auth.login.lockout', meta, {
@@ -179,14 +228,15 @@ export class AuthService {
         );
       }
 
-      const user = await this.prisma.user.findUnique({
-        where: { tenantId_email: { tenantId: tenant.id, email } },
-      });
+      const user = await this.prisma.user.findUnique({ where: { email } });
       if (!user || !user.isActive || !user.passwordHash) {
-        // Still run argon2.verify against a decoy hash to mitigate timing
-        // side-channels (best-effort; DB latency dominates anyway).
-        await argon2.hash('decoy-password-for-timing', ARGON2_OPTIONS).catch(() => undefined);
-        await this.writeAuditLog(tenant.id, null, 'auth.login.fail', meta, { email });
+        // Timing-attack mitigation: still run argon2.hash on a decoy.
+        await argon2.hash('decoy-password-for-timing', ARGON2_OPTIONS).catch(
+          () => undefined,
+        );
+        await this.writeAuditLog(tenant.id, null, 'auth.login.fail', meta, {
+          email,
+        });
         throw new UnauthorizedException('Invalid credentials');
       }
 
@@ -198,26 +248,49 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
+      // User must have a Membership in this tenant. This is the single
+      // source of truth for "can this user access this tenant".
+      const membership = await this.prisma.membership.findUnique({
+        where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
+      });
+      if (!membership) {
+        await this.writeAuditLog(
+          tenant.id,
+          user.id,
+          'auth.login.no_membership',
+          meta,
+          { email },
+        );
+        throw new UnauthorizedException(
+          'You do not have access to this tenant. Ask an admin to invite you.',
+        );
+      }
+
       await this.prisma.user.update({
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
       });
 
-      // Reset the lockout counter on success: mark any recent failure rows
-      // for this (tenant, email) pair as consumed so the window no longer
-      // counts them. We use metadata instead of deleting for auditability.
       await this.resetLoginFailures(tenant.id, email);
-
-      await this.writeAuditLog(tenant.id, user.id, 'auth.login.ok', meta);
+      await this.writeAuditLog(tenant.id, user.id, 'auth.login.ok', meta, {
+        membershipId: membership.id,
+        role: membership.role,
+      });
 
       const tokens = await this.issueTokens(
-        { userId: user.id, tenantId: tenant.id, role: user.role },
+        {
+          userId: user.id,
+          tenantId: tenant.id,
+          membershipId: membership.id,
+          role: membership.role,
+        },
         meta,
       );
 
       return this.toSession(
         tokens,
-        { id: user.id, email: user.email, name: user.name, role: user.role },
+        { id: user.id, email: user.email, name: user.name },
+        { id: membership.id, tenantId: tenant.id, role: membership.role },
         { id: tenant.id, slug: tenant.slug, name: tenant.name },
       );
     });
@@ -240,9 +313,11 @@ export class AuthService {
         where: { tokenHash },
       });
 
-      if (!stored || stored.tenantId !== claims.tid || stored.userId !== claims.sub) {
-        // Token doesn't exist or doesn't match — treat as reuse attempt and
-        // revoke entire family if we have one. Token may have been rotated.
+      if (
+        !stored ||
+        stored.tenantId !== claims.tid ||
+        stored.userId !== claims.sub
+      ) {
         if (stored) {
           await this.revokeFamily(stored.familyId, 'refresh.mismatch');
         }
@@ -256,7 +331,6 @@ export class AuthService {
       }
 
       if (stored.revokedAt) {
-        // Reuse of a revoked token — kill the whole family.
         await this.revokeFamily(stored.familyId, 'refresh.reuse');
         await this.writeAuditLog(
           stored.tenantId,
@@ -274,7 +348,7 @@ export class AuthService {
       const user = await this.prisma.user.findUnique({
         where: { id: stored.userId },
       });
-      if (!user || !user.isActive || user.tenantId !== stored.tenantId) {
+      if (!user || !user.isActive) {
         throw new UnauthorizedException('User no longer active');
       }
 
@@ -285,9 +359,30 @@ export class AuthService {
         throw new UnauthorizedException('Tenant unavailable');
       }
 
-      // Rotate: revoke old token, issue new one in the same family.
+      // Re-verify the membership still exists (admin may have removed the user).
+      const membership = await this.prisma.membership.findUnique({
+        where: {
+          userId_tenantId: { userId: user.id, tenantId: tenant.id },
+        },
+      });
+      if (!membership) {
+        await this.revokeFamily(stored.familyId, 'refresh.no_membership');
+        await this.writeAuditLog(
+          tenant.id,
+          user.id,
+          'auth.refresh.no_membership',
+          meta,
+        );
+        throw new UnauthorizedException('Membership revoked');
+      }
+
       const newTokens = await this.issueTokens(
-        { userId: user.id, tenantId: tenant.id, role: user.role },
+        {
+          userId: user.id,
+          tenantId: tenant.id,
+          membershipId: membership.id,
+          role: membership.role,
+        },
         meta,
         { familyId: stored.familyId },
       );
@@ -310,7 +405,8 @@ export class AuthService {
 
       return this.toSession(
         newTokens,
-        { id: user.id, email: user.email, name: user.name, role: user.role },
+        { id: user.id, email: user.email, name: user.name },
+        { id: membership.id, tenantId: tenant.id, role: membership.role },
         { id: tenant.id, slug: tenant.slug, name: tenant.name },
       );
     });
@@ -331,7 +427,6 @@ export class AuthService {
           await this.revokeFamily(stored.familyId, 'auth.logout');
         }
       } else {
-        // No explicit token — revoke ALL active refresh tokens for this user.
         await this.prisma.refreshToken.updateMany({
           where: {
             userId: ctx.userId,
@@ -345,25 +440,102 @@ export class AuthService {
     });
   }
 
+  /**
+   * Issue access + refresh tokens for an existing membership row.
+   * Used by the public invite acceptance flow so the new user is logged in
+   * immediately (same response shape as `/auth/register` and `/auth/login`).
+   */
+  async issueSessionForMembership(
+    userId: string,
+    membershipId: string,
+    meta: RequestMeta,
+  ): Promise<AuthSession> {
+    return this.tenantCtx.runWithTenantBypass(async () => {
+      const membership = await this.prisma.membership.findUnique({
+        where: { id: membershipId },
+        include: { user: true },
+      });
+      if (!membership || membership.userId !== userId) {
+        throw new UnauthorizedException('Invalid membership');
+      }
+      const user = membership.user;
+      if (!user.isActive) {
+        throw new UnauthorizedException('User inactive');
+      }
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: membership.tenantId },
+      });
+      if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
+        throw new UnauthorizedException('Tenant unavailable');
+      }
+      const tokens = await this.issueTokens(
+        {
+          userId: user.id,
+          tenantId: tenant.id,
+          membershipId: membership.id,
+          role: membership.role,
+        },
+        meta,
+      );
+      await this.writeAuditLog(tenant.id, user.id, 'auth.invite_accept_public', meta, {
+        membershipId: membership.id,
+        role: membership.role,
+      });
+      return this.toSession(
+        tokens,
+        { id: user.id, email: user.email, name: user.name },
+        { id: membership.id, tenantId: tenant.id, role: membership.role },
+        { id: tenant.id, slug: tenant.slug, name: tenant.name },
+      );
+    });
+  }
+
   async me(userId: string, tenantId: string) {
     return this.tenantCtx.runWithTenantBypass(async () => {
       const user = await this.prisma.user.findUnique({ where: { id: userId } });
-      if (!user || user.tenantId !== tenantId) {
+      if (!user) {
         throw new UnauthorizedException('User not found');
+      }
+      const membership = await this.prisma.membership.findUnique({
+        where: { userId_tenantId: { userId, tenantId } },
+      });
+      if (!membership) {
+        throw new UnauthorizedException('No membership for this tenant');
       }
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
+      });
+      const subscription = await this.prisma.subscription.findUnique({
+        where: { tenantId },
+      });
+      const memberCount = await this.prisma.membership.count({
+        where: { tenantId },
+      });
+      const pendingInvites = await this.prisma.invitation.count({
+        where: { tenantId, status: 'PENDING' },
       });
       return {
         user: {
           id: user.id,
           email: user.email,
           name: user.name,
-          role: user.role,
-          tenantId: user.tenantId,
+        },
+        membership: {
+          id: membership.id,
+          role: membership.role,
         },
         tenant: tenant
           ? { id: tenant.id, slug: tenant.slug, name: tenant.name }
+          : null,
+        subscription: subscription
+          ? {
+              plan: subscription.plan,
+              maxUsers: subscription.maxUsers,
+              status: subscription.status,
+              memberCount,
+              pendingInvites,
+              seatsRemaining: Math.max(0, subscription.maxUsers - memberCount),
+            }
           : null,
       };
     });
@@ -373,9 +545,7 @@ export class AuthService {
    * Mint a short-lived service token scoped to a single tenant.
    *
    * Protected at the controller layer by a shared `SERVICE_BOOTSTRAP_KEY`.
-   * This is intentionally a *bootstrap* endpoint — production should rotate
-   * the resulting JWT well before `ttlSeconds` expires (e.g. via a cron in
-   * the client service that re-hits this endpoint with the bootstrap key).
+   * Service tokens do NOT carry `mid` (they have no Membership row).
    */
   async mintServiceToken(
     dto: ServiceTokenDto,
@@ -391,7 +561,6 @@ export class AuthService {
     const tenantSlug = dto.tenantSlug.trim().toLowerCase();
     const label = dto.label?.trim().slice(0, 128) || null;
 
-    // Clamp TTL to a sensible range (min 60s, max 6 * default).
     const maxTtl = DEFAULT_SERVICE_TTL_SECONDS * 6;
     const requested = Number.isFinite(dto.ttlSeconds as number)
       ? Math.floor(Number(dto.ttlSeconds))
@@ -411,10 +580,11 @@ export class AuthService {
       const token = this.jwt.sign({
         subject: `service:${tenant.slug}`,
         tenantId: tenant.id,
-        role: UserRole.SERVICE,
+        role: 'SERVICE' as TokenRole,
         jti,
         type: 'service',
         ttlSeconds,
+        // Service tokens explicitly omit `membershipId`.
       });
 
       await this.writeAuditLog(
@@ -444,21 +614,13 @@ export class AuthService {
   ): Promise<boolean> {
     const since = new Date(Date.now() - this.lockoutWindowSeconds * 1000);
 
-    // Per-(tenant,email): each failure row stores the attempted email in
-    // `metadata.email`. We query using JSON path to keep the cost low.
     const emailFailures = await this.prisma.auditLog.count({
       where: {
         tenantId,
         action: 'auth.login.fail',
         createdAt: { gte: since },
-        // Prisma JSON filter: matches rows where metadata.email === email
-        // and metadata.lockoutReset is not true (i.e. still counted).
-        AND: [
-          { metadata: { path: ['email'], equals: email } },
-        ],
-        NOT: {
-          metadata: { path: ['lockoutReset'], equals: true },
-        },
+        AND: [{ metadata: { path: ['email'], equals: email } }],
+        NOT: { metadata: { path: ['lockoutReset'], equals: true } },
       },
     });
     if (emailFailures >= this.lockoutThreshold) return true;
@@ -470,9 +632,7 @@ export class AuthService {
           action: 'auth.login.fail',
           createdAt: { gte: since },
           ip,
-          NOT: {
-            metadata: { path: ['lockoutReset'], equals: true },
-          },
+          NOT: { metadata: { path: ['lockoutReset'], equals: true } },
         },
       });
       if (ipFailures >= this.lockoutIpThreshold) return true;
@@ -481,7 +641,6 @@ export class AuthService {
     return false;
   }
 
-  /** Mark prior failures as reset so they no longer count against lockout. */
   private async resetLoginFailures(
     tenantId: string,
     email: string,
@@ -517,7 +676,7 @@ export class AuthService {
   }
 
   private async issueTokens(
-    subject: { userId: string; tenantId: string; role: UserRole },
+    subject: IssueTokenSubject,
     meta: RequestMeta,
     opts: { familyId?: string } = {},
   ): Promise<AuthTokens> {
@@ -528,6 +687,7 @@ export class AuthService {
     const accessToken = this.jwt.sign({
       subject: subject.userId,
       tenantId: subject.tenantId,
+      membershipId: subject.membershipId,
       role: subject.role,
       jti: accessJti,
       type: 'access',
@@ -537,6 +697,7 @@ export class AuthService {
     const refreshToken = this.jwt.sign({
       subject: subject.userId,
       tenantId: subject.tenantId,
+      membershipId: subject.membershipId,
       role: subject.role,
       jti: refreshJti,
       type: 'refresh',
@@ -551,6 +712,7 @@ export class AuthService {
         id: refreshJti,
         tenantId: subject.tenantId,
         userId: subject.userId,
+        membershipId: subject.membershipId,
         tokenHash: hashRefresh(refreshToken),
         familyId,
         expiresAt,
@@ -577,18 +739,14 @@ export class AuthService {
 
   private toSession(
     tokens: AuthTokens,
-    user: { id: string; email: string; name: string | null; role: UserRole },
+    user: { id: string; email: string; name: string | null },
+    membership: { id: string; tenantId: string; role: MembershipRole },
     tenant: { id: string; slug: string; name: string },
   ): AuthSession {
     return {
       ...tokens,
-      user: {
-        id: user.id,
-        tenantId: tenant.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      },
+      user,
+      membership,
       tenant,
     };
   }

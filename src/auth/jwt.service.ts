@@ -1,13 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
-import type { UserRole } from '@prisma/client';
+import type { TokenRole } from './role.types';
 
 export type JwtTokenType = 'access' | 'refresh' | 'service';
 
 export interface BaseJwtClaims {
   sub: string;
   tid: string;
-  role: UserRole;
+  /**
+   * Membership ID — present on `access` and `refresh` tokens issued for a
+   * human user. Absent (undefined) on `service` tokens, which have no
+   * underlying Membership row.
+   */
+  mid?: string;
+  role: TokenRole;
   jti: string;
   type: JwtTokenType;
   iat: number;
@@ -19,7 +25,8 @@ export interface BaseJwtClaims {
 export interface SignOptions {
   subject: string;
   tenantId: string;
-  role: UserRole;
+  membershipId?: string;
+  role: TokenRole;
   jti: string;
   type: JwtTokenType;
   ttlSeconds: number;
@@ -72,6 +79,7 @@ export class AuthJwtService {
     const payload: Omit<BaseJwtClaims, 'iat' | 'exp'> = {
       sub: opts.subject,
       tid: opts.tenantId,
+      mid: opts.membershipId,
       role: opts.role,
       jti: opts.jti,
       type: opts.type,
@@ -103,6 +111,13 @@ export class AuthJwtService {
     const claims = decoded as BaseJwtClaims;
     if (!claims.sub || !claims.tid || !claims.role || !claims.jti || !claims.type) {
       throw new Error('JWT payload missing required claims (sub/tid/role/jti/type)');
+    }
+    // Access/refresh tokens must carry `mid`; service tokens must NOT.
+    if (claims.type !== 'service' && !claims.mid) {
+      throw new Error('JWT payload missing membership id (mid)');
+    }
+    if (claims.type === 'service' && claims.mid) {
+      throw new Error('Service token must not carry a membership id');
     }
     if (expectedType && claims.type !== expectedType) {
       throw new Error(

@@ -10,6 +10,9 @@ import { FeedbackModule } from './feedback/feedback.module';
 import { EgressModule } from './egress/egress.module';
 import { PipelineModule } from './pipeline/pipeline.module';
 import { LLMFeedbackModule } from './llm-feedback/llm-feedback.module';
+import { BillingModule } from './billing/billing.module';
+import { MembersModule } from './members/members.module';
+import { InvitationsModule } from './invitations/invitations.module';
 
 @Module({
   imports: [
@@ -19,6 +22,9 @@ import { LLMFeedbackModule } from './llm-feedback/llm-feedback.module';
     TenancyModule,
     PrismaModule,
     AuthModule,
+    BillingModule,
+    MembersModule,
+    InvitationsModule,
     FeedbackModule,
     EgressModule,
     PipelineModule,

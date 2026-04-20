@@ -10,7 +10,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import type { Prisma, UserRole } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import type { FeedbackSeverity, FeedbackType } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -85,7 +85,8 @@ export class FeedbackGateway
         const ctx: TenantContext = Object.freeze({
           userId: claims.sub,
           tenantId: claims.tid,
-          role: claims.role as UserRole,
+          membershipId: claims.mid ?? null,
+          role: claims.role,
           jti: claims.jti,
         });
         // `socket.data` is the ONLY authoritative context during the lifetime
