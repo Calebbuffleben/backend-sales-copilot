@@ -24,6 +24,7 @@ export interface PublishFeedbackRequest {
   transcript_text?: string;
   transcript_confidence?: number;
   analysis?: ProtoAnalysisPayload;
+  tenant_id?: string;
 }
 
 export interface LLMAnalysisIngress {
@@ -35,6 +36,7 @@ export interface LLMAnalysisIngress {
 }
 
 export interface LLMIngressEvent {
+  tenantId: string;
   meetingId: string;
   participantId: string;
   participantName?: string;
@@ -48,6 +50,10 @@ export interface LLMIngressEvent {
   rawSeverity?: string;
   rawMessage?: string;
   analysis: LLMAnalysisIngress;
+  /** Optional redundant tenantId sent by the client. MUST equal tenantId from
+   *  the token when present — checked by `FeedbackGrpcServer` before this
+   *  event reaches any service. */
+  claimedTenantId?: string;
 }
 
 function toDateFromEpochMs(value: number | string): Date {
@@ -77,8 +83,11 @@ function toParticipantRole(value?: string): ParticipantRole | undefined {
 
 export function mapPublishFeedbackRequest(
   request: PublishFeedbackRequest,
+  tenantId: string,
 ): LLMIngressEvent {
   return {
+    tenantId,
+    claimedTenantId: request.tenant_id?.trim() || undefined,
     meetingId: request.meeting_id,
     participantId: request.participant_id,
     participantName: request.participant_name?.trim() || undefined,

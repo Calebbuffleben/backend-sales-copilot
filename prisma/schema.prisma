@@ -10,14 +10,96 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Example model - you can add your own models here
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ---------------------------------------------------------------------------
+// Multi-tenant core
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
 }
+
+model Tenant {
+  id        String       @id @default(uuid())
+  slug      String       @unique
+  name      String
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  users           User[]
+  sessions        Session[]
+  feedbackEvents  FeedbackEvent[]
+  refreshTokens   RefreshToken[]
+  auditLogs       AuditLog[]
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  SERVICE
+}
+
+model User {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String?
+  name         String?
+  role         UserRole  @default(MEMBER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  refreshTokens RefreshToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique
+  familyId     String
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  createdByIp  String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  userId    String?
+  action    String
+  target    String?
+  ip        String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([action])
+}
+
+// ---------------------------------------------------------------------------
+// Meeting / feedback domain (tenant-scoped)
+// ---------------------------------------------------------------------------
 
 enum SessionStatus {
   ACTIVE
@@ -25,15 +107,19 @@ enum SessionStatus {
 }
 
 model Session {
-  id         String         @id @default(uuid())
-  meetingId  String         @unique
-  roomSid    String?        @unique
-  roomName   String
-  status     SessionStatus  @default(ACTIVE)
-  startedAt  DateTime       @default(now())
-  endedAt    DateTime?
+  id        String        @id @default(uuid())
+  tenantId  String
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId String
+  roomSid   String?       @unique
+  roomName  String
+  status    SessionStatus @default(ACTIVE)
+  startedAt DateTime      @default(now())
+  endedAt   DateTime?
 
+  @@unique([tenantId, meetingId])
   @@index([roomName])
+  @@index([tenantId])
 }
 
 enum FeedbackSeverity {
@@ -81,20 +167,21 @@ enum FeedbackType {
 }
 
 model FeedbackEvent {
-  id             String            @id @default(uuid())
-  meetingId      String
-  participantId  String
-  type           FeedbackType
-  severity       FeedbackSeverity
-  ts             DateTime
-  windowStart    DateTime
-  windowEnd      DateTime
-  message        String
-  metadata       Json
-  createdAt      DateTime          @default(now())
-  expiresAt      DateTime?
+  id            String           @id @default(uuid())
+  tenantId      String
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId     String
+  participantId String
+  type          FeedbackType
+  severity      FeedbackSeverity
+  ts            DateTime
+  windowStart   DateTime
+  windowEnd     DateTime
+  message       String
+  metadata      Json
+  createdAt     DateTime         @default(now())
+  expiresAt     DateTime?
 
-  @@index([meetingId, ts])
+  @@index([tenantId, meetingId, ts])
   @@index([expiresAt])
 }
-

@@ -7,4 +7,4 @@ import { FeedbackModule } from '../feedback/feedback.module';
   providers: [LLMFeedbackService],
   exports: [LLMFeedbackService],
 })
-export class LLMFeedbackModule { }
+export class LLMFeedbackModule {}

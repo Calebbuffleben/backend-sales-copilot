@@ -107,6 +107,51 @@ O backend expõe um gateway Socket.IO na porta 3001 (ou PORT configurada).
 - `GET /health`: Health check
 - `GET /feedback/metrics/:meetingId`: Métricas de feedback de uma reunião
 
+### Autenticação e multi-tenancy
+
+O backend é multi-tenant com isolamento row-level e autenticação JWT.
+Detalhes completos em [`docs/auth-architecture.md`](../docs/auth-architecture.md)
+e [`docs/tenancy.md`](../docs/tenancy.md). Resumo:
+
+- **Endpoints** (`AuthController`): `POST /auth/register`, `POST /auth/login`,
+  `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`,
+  `POST /auth/service-token` (protegido por `SERVICE_BOOTSTRAP_KEY`). Todos
+  com rate limit dedicado via `@nestjs/throttler`.
+- **Tokens**: RS256 em produção (`JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`), HS256
+  (`JWT_SECRET`) somente fora de produção. Access curto, refresh rotativo com
+  família (`RefreshToken.familyId` / `jti`). Tokens de serviço são cunhados
+  por tenant via `POST /auth/service-token` com TTL clamped a
+  `[60s, 6 × DEFAULT_SERVICE_TTL_SECONDS]` e registrados em `AuditLog`.
+- **Guards globais**: `JwtAuthGuard` + `RolesGuard` via `APP_GUARD`. Endpoints
+  públicos usam `@Public()`. O guard evita re-verificar o JWT quando o
+  `TenantContextMiddleware` já populou `req.user`.
+- **Lockout de login**: falhas `auth.login.fail` são contadas numa janela
+  deslizante por `(tenantId, email)` e por IP. Ao atingir
+  `AUTH_LOCKOUT_EMAIL_THRESHOLD` (5) ou `AUTH_LOCKOUT_IP_THRESHOLD` (20) o
+  endpoint responde `401 Too many failed attempts`. Um login bem-sucedido
+  reseta o contador e escreve `auth.login.ok`.
+- **Tenancy**: `tenantId` sempre vem do JWT (`token.tid`). Middleware Prisma
+  (`prisma-tenancy.middleware.ts`) injeta o filtro automaticamente;
+  `x-tenant-id` do cliente é apenas hint redundante — validado no
+  `TenantContextMiddleware` (HTTP), no gateway (Socket.IO), no upgrade
+  (`/egress-audio`) e em `FeedbackGrpcServer.authenticate` (gRPC). Tokens
+  `role=SERVICE` usados pelo Python exigem `x-tenant-id` obrigatório (que
+  vira o tenant efetivo da chamada — desvio deliberado do plano original,
+  justificado em `docs/auth-architecture.md`). Tenant mismatch é auditado
+  com `action='tenant_mismatch'` e `target` transport-specific.
+- **Hardening**: `helmet` + `ValidationPipe` global, `CORS_ORIGINS` allowlist
+  obrigatório em produção (HTTP e Socket.IO), gRPC com TLS/mTLS
+  (`GRPC_TLS_SERVER_CERT`, `GRPC_TLS_SERVER_KEY`, `GRPC_TLS_CLIENT_CA`).
+  `createInsecure()` é recusado em produção.
+- **Env adicionais** (nomes reais usados pelo código):
+  `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`, `JWT_SECRET` (dev-only),
+  `JWT_ISSUER`, `JWT_AUDIENCE`,
+  `JWT_ACCESS_TTL_SECONDS` (default 900),
+  `JWT_REFRESH_TTL_SECONDS` (default 604800),
+  `ALLOW_SELF_SIGNUP`, `SERVICE_BOOTSTRAP_KEY`,
+  `AUTH_LOCKOUT_WINDOW_SECONDS`, `AUTH_LOCKOUT_EMAIL_THRESHOLD`,
+  `AUTH_LOCKOUT_IP_THRESHOLD`, `CORS_ORIGINS`, `GRPC_TLS_*`.
+
 ## Compile and run the project
 
 ```bash

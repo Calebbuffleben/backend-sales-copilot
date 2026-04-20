@@ -8,18 +8,22 @@ export class LLMFeedbackService {
 
   constructor(
     @Inject(forwardRef(() => FeedbackService))
-    private readonly feedbackService: FeedbackService
+    private readonly feedbackService: FeedbackService,
   ) {}
 
   async handleIngress(event: LLMIngressEvent): Promise<void> {
     if (!event.analysis.directFeedback) {
       // Nenhum feedback direto foi gerado pela LLM para esse trecho
-      this.logger.log(`[Step 8] O evento recebido (Reunião ${event.meetingId}) não possui feedback direto da LLM, ignorando propagação para UI.`);
+      this.logger.log(
+        `[Step 8] O evento recebido (Reunião ${event.meetingId}) não possui feedback direto da LLM, ignorando propagação para UI.`,
+      );
       return;
     }
 
     try {
-      this.logger.log(`[Step 8] Processando feedback positivo da LLM para persistência/UI: "${event.analysis.directFeedback}"`);
+      this.logger.log(
+        `[Step 8] Processando feedback positivo da LLM para persistência/UI: "${event.analysis.directFeedback}"`,
+      );
 
       let severity: 'info' | 'warning' | 'critical' = 'info';
       let spinPhase: string | undefined;
@@ -47,6 +51,7 @@ export class LLMFeedbackService {
       // Passa a bola para o FeedbackService que orquestra a persistencia DB
       // e consequentemente emite o broadcast de WebSockets via Gateway
       await this.feedbackService.createFeedback({
+        tenantId: event.tenantId,
         meetingId: event.meetingId,
         participantId: event.participantId,
         type: 'llm_insight' as any,

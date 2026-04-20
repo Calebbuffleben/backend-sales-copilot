@@ -4,12 +4,22 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { Server } from 'http';
+import { Server, IncomingMessage } from 'http';
 import * as WebSocket from 'ws';
+import type { Socket } from 'net';
 import { PipelineService, AudioChunkMeta } from '../pipeline/pipeline.service';
+import { AuthJwtService } from '../auth/jwt.service';
+import {
+  assertTenantMatch,
+  requireTenant,
+} from '../tenancy/tenant-context.service';
+import type { TenantContext } from '../tenancy/tenant-context.types';
 
 interface EgressConnection {
   ws: WebSocket;
+  /** Authenticated context frozen at upgrade time. Never re-read from the
+   *  URL/headers afterwards — closure captures it per-connection. */
+  ctx: TenantContext;
   room: string;
   meetingId: string;
   participant: string;
@@ -20,7 +30,6 @@ interface EgressConnection {
   chunksReceived: number;
   connectedAt: Date;
   lastChunkAt: Date;
-  /** Throttle INFO logs for ingress progress (not only first chunk). */
   lastIngressLogAt: number;
 }
 
@@ -31,7 +40,10 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
   private connections = new Map<WebSocket, EgressConnection>();
   private httpServer: Server | null = null;
 
-  constructor(private readonly pipelineService: PipelineService) {}
+  constructor(
+    private readonly pipelineService: PipelineService,
+    private readonly jwt: AuthJwtService,
+  ) {}
 
   setHttpServer(server: Server) {
     this.httpServer = server;
@@ -39,8 +51,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
-    // WebSocket will be initialized when HTTP server is ready
-    // via setHttpServer() called from main.ts
+    // WebSocket is initialized when HTTP server is ready via setHttpServer().
   }
 
   private initializeWebSocket() {
@@ -49,25 +60,46 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Create WebSocket server disconnected from HTTP server events initially
     this.wss = new WebSocket.Server({
       noServer: true,
-      perMessageDeflate: false, // Disable compression for binary data
+      perMessageDeflate: false,
     });
 
-    this.wss.on('connection', (ws: WebSocket, req) => {
-      this.handleConnection(ws, req);
-    });
+    this.httpServer.on(
+      'upgrade',
+      (request: IncomingMessage, socket: Socket, head: Buffer) => {
+        const pathname = request.url ? request.url.split('?')[0] : '';
+        if (pathname !== '/egress-audio') return;
 
-    // Manually handle the upgrade event so 'ws' doesn't destroy other connections
-    this.httpServer.on('upgrade', (request: any, socket: any, head: any) => {
-      const pathname = request.url ? request.url.split('?')[0] : '';
-      if (pathname === '/egress-audio') {
+        // --- Authentication BEFORE upgrade ---
+        const token = extractTokenFromUpgrade(request);
+        if (!token) {
+          abortUpgrade(socket, 401, 'missing token');
+          return;
+        }
+
+        let ctx: TenantContext;
+        try {
+          const claims = this.jwt.verify(token, 'access');
+          ctx = Object.freeze({
+            userId: claims.sub,
+            tenantId: claims.tid,
+            role: claims.role as TenantContext['role'],
+            jti: claims.jti,
+          });
+        } catch (err) {
+          this.logger.warn(
+            `WS /egress-audio upgrade rejected: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          abortUpgrade(socket, 401, 'invalid token');
+          return;
+        }
+
         this.wss?.handleUpgrade(request, socket, head, (ws) => {
-          this.wss?.emit('connection', ws, request);
+          this.handleConnection(ws as WebSocket, request, ctx);
         });
-      }
-    });
+      },
+    );
   }
 
   onModuleDestroy() {
@@ -76,11 +108,13 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private handleConnection(ws: WebSocket, req: { url?: string }) {
+  private handleConnection(
+    ws: WebSocket,
+    req: IncomingMessage,
+    ctx: TenantContext,
+  ) {
     const url = new URL(req.url || '/', 'http://localhost');
-    const room = url.searchParams.get('room') || '';
-    const meetingId = url.searchParams.get('meetingId') || room;
-    // participant is optional now (shared connection mode)
+    const meetingId = (url.searchParams.get('meetingId') || '').trim();
     const participant = url.searchParams.get('participant') || 'browser';
     const track = url.searchParams.get('track') || 'webrtc-audio';
     const sampleRate = parseInt(
@@ -88,16 +122,29 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       10,
     );
     const channels = parseInt(url.searchParams.get('channels') || '1', 10);
+    const claimedTenantId = url.searchParams.get('tenantId') || '';
 
     if (!meetingId) {
-      this.logger.error(`Missing required query parameter: meetingId`);
+      this.logger.error('Missing required query parameter: meetingId');
       ws.close(1008, 'Missing meetingId');
+      return;
+    }
+
+    try {
+      requireTenant(ctx, 'egress-audio.upgrade');
+      assertTenantMatch(ctx.tenantId, claimedTenantId || null);
+    } catch (err) {
+      this.logger.warn(
+        `WS /egress-audio tenant mismatch: token=${ctx.tenantId} claimed=${claimedTenantId}`,
+      );
+      ws.close(1008, 'tenant mismatch');
       return;
     }
 
     const connection: EgressConnection = {
       ws,
-      room,
+      ctx,
+      room: `${ctx.tenantId}:${meetingId}`,
       meetingId,
       participant,
       track,
@@ -113,10 +160,13 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     this.connections.set(ws, connection);
 
     this.logger.log(
-      `WS /egress-audio connected | meetingId=${meetingId} | participant=${participant} | track=${track} | ${sampleRate}Hz/${channels}ch`,
+      `WS /egress-audio connected | tenant=${ctx.tenantId} user=${ctx.userId} meetingId=${meetingId} | participant=${participant} | track=${track} | ${sampleRate}Hz/${channels}ch`,
     );
 
-    // Handle binary audio data
+    // ⚠️ Context capture via closure — NEVER re-read tenantId from the URL or
+    // headers in these handlers, and NEVER trust AsyncLocalStorage here. The
+    // `ws` library keeps these callbacks alive for the full lifetime of the
+    // connection and they are intercalated across concurrent tenants.
     ws.on('message', (data: WebSocket.Data) => {
       if (Buffer.isBuffer(data) || data instanceof ArrayBuffer) {
         this.handleAudioData(connection, data);
@@ -124,20 +174,18 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     });
 
     ws.on('error', (error) => {
-      const conn = this.connections.get(ws);
-      const meetingId = conn?.meetingId || 'unknown';
       this.logger.error(
-        `❌ WebSocket ERROR | meetingId=${meetingId} | participant=${participant} | error=${error.message || error}`,
+        `❌ WebSocket ERROR | tenant=${ctx.tenantId} meetingId=${meetingId} | participant=${participant} | error=${error.message || error}`,
         error.stack || '',
       );
     });
 
-    ws.on('close', (code, reason) => {
+    ws.on('close', (code, _reason) => {
       const conn = this.connections.get(ws);
       if (conn) {
         const duration = Date.now() - conn.connectedAt.getTime();
         this.logger.log(
-          `WS /egress-audio closed | meetingId=${conn.meetingId} | chunks=${conn.chunksReceived} | bytes=${conn.bytesReceived} | durationMs=${duration} | code=${code}`,
+          `WS /egress-audio closed | tenant=${conn.ctx.tenantId} meetingId=${conn.meetingId} | chunks=${conn.chunksReceived} | bytes=${conn.bytesReceived} | durationMs=${duration} | code=${code}`,
         );
         this.connections.delete(ws);
       }
@@ -156,12 +204,11 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     connection.chunksReceived += 1;
     connection.lastChunkAt = now;
 
-    const { meetingId, participant } = connection;
+    const { ctx, meetingId, participant } = connection;
     if (connection.chunksReceived === 1) {
-      const bytesPerSec =
-        connection.sampleRate * connection.channels * 2; // s16le
+      const bytesPerSec = connection.sampleRate * connection.channels * 2;
       this.logger.log(
-        `First audio chunk | meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize} | sampleRate=${connection.sampleRate} | channels=${connection.channels} | s16leBytesPerSec=${bytesPerSec}`,
+        `First audio chunk | tenant=${ctx.tenantId} meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize} | sampleRate=${connection.sampleRate} | channels=${connection.channels} | s16leBytesPerSec=${bytesPerSec}`,
       );
       connection.lastIngressLogAt = now.getTime();
     } else {
@@ -170,13 +217,14 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       if (t - connection.lastIngressLogAt >= periodMs) {
         connection.lastIngressLogAt = t;
         this.logger.log(
-          `Audio ingress | meetingId=${meetingId} | chunks=${connection.chunksReceived} | bytes=${connection.bytesReceived} | lastChunk=${chunkSize}b`,
+          `Audio ingress | tenant=${ctx.tenantId} meetingId=${meetingId} | chunks=${connection.chunksReceived} | bytes=${connection.bytesReceived} | lastChunk=${chunkSize}b`,
         );
       }
     }
 
-    // Enviar para o pipeline de processamento de áudio
     const meta: AudioChunkMeta = {
+      tenantId: connection.ctx.tenantId,
+      userId: connection.ctx.userId,
       meetingId: connection.meetingId,
       participant: connection.participant,
       track: connection.track,
@@ -209,6 +257,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     totalBytesReceived: number;
     totalChunksReceived: number;
     connections: Array<{
+      tenantId: string;
       meetingId: string;
       participant: string;
       bytesReceived: number;
@@ -230,6 +279,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
         0,
       ),
       connections: connections.map((conn) => ({
+        tenantId: conn.ctx.tenantId,
         meetingId: conn.meetingId,
         participant: conn.participant,
         bytesReceived: conn.bytesReceived,
@@ -238,4 +288,42 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       })),
     };
   }
+}
+
+function extractTokenFromUpgrade(req: IncomingMessage): string | null {
+  const authHeader =
+    req.headers['authorization'] ?? req.headers['Authorization'.toLowerCase()];
+  if (typeof authHeader === 'string') {
+    const [scheme, token] = authHeader.split(' ');
+    if (scheme?.toLowerCase() === 'bearer' && token) {
+      return token.trim() || null;
+    }
+  }
+  try {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const qs = url.searchParams.get('token');
+    if (qs) return qs;
+  } catch {
+    /* noop */
+  }
+  // Sec-WebSocket-Protocol can carry the token for browser-like clients that
+  // cannot set Authorization headers on upgrade requests.
+  const swp = req.headers['sec-websocket-protocol'];
+  if (typeof swp === 'string') {
+    const match = swp.split(',').map((s) => s.trim());
+    const bearer = match.find((p) => p.toLowerCase().startsWith('bearer.'));
+    if (bearer) return bearer.slice('bearer.'.length) || null;
+  }
+  return null;
+}
+
+function abortUpgrade(socket: Socket, code: number, reason: string): void {
+  try {
+    socket.write(
+      `HTTP/1.1 ${code} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+    );
+  } catch {
+    /* noop */
+  }
+  socket.destroy();
 }
