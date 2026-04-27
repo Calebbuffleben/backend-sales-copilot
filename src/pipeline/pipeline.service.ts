@@ -3,6 +3,8 @@ import { GrpcAudioClient } from './grpc-audio.client';
 import { convertPcmToWav } from './audio-utils';
 
 export type AudioChunkMeta = {
+  tenantId: string;
+  userId?: string;
   meetingId: string;
   participant: string;
   track: string;
@@ -74,7 +76,7 @@ export class PipelineService {
   }
 
   private buildKey(meta: AudioChunkMeta): string {
-    return `${meta.meetingId}:${meta.participant}:${meta.track}`;
+    return `${meta.tenantId}:${meta.meetingId}:${meta.participant}:${meta.track}`;
   }
 
   private computeThresholdBytes(meta: AudioChunkMeta, seconds: number): number {
@@ -120,7 +122,6 @@ export class PipelineService {
       const wavBuffer = convertPcmToWav(pcm, meta.sampleRate, meta.channels);
       const t2_conversion_end = Date.now();
 
-      // Preparar chunk para envio via gRPC
       const audioChunk = {
         meeting_id: meta.meetingId,
         participant_id: meta.participant,
@@ -130,6 +131,8 @@ export class PipelineService {
         channels: meta.channels,
         timestamp_ms: captureTs,
         sequence: seq,
+        tenant_id: meta.tenantId,
+        user_id: meta.userId ?? '',
       };
 
       const t3_ready_to_send = Date.now();
@@ -138,10 +141,6 @@ export class PipelineService {
       await this.grpcClient.sendAudioChunk(key, audioChunk);
 
       const t4_sent = Date.now();
-
-      this.logger.log(
-        `Pipeline → gRPC | ${key} | seq=${seq} | sampleRate=${meta.sampleRate} | channels=${meta.channels} | pcmBytes=${pcm.length} | wavBytes=${wavBuffer.length} | expectedPcmBytesPerSec=${meta.sampleRate * meta.channels * 2}`,
-      );
 
       // Latência detalhada (habilitar LOG_LEVEL=debug para ver no deploy)
       this.logger.debug(`[LATENCY] Audio pipeline timing`, {

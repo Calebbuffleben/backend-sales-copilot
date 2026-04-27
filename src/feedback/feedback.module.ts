@@ -3,20 +3,14 @@ import { FeedbackGateway } from './feedback.gateway';
 import { FeedbackService } from './feedback.service';
 import { FeedbackController } from './feedback.controller';
 import { FeedbackGrpcServer } from './feedback.grpc.server';
-import { TextAnalysisFeedbackService } from './text-analysis-feedback/text-analysis-feedback.service';
-import { MeetingStateStore } from './text-analysis-feedback/state-store';
-import { ParticipantContextProvider } from './text-analysis-feedback/context-provider';
+import { forwardRef } from '@nestjs/common';
+import { LLMFeedbackModule } from '../llm-feedback/llm-feedback.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  providers: [
-    FeedbackGateway,
-    FeedbackService,
-    FeedbackGrpcServer,
-    TextAnalysisFeedbackService,
-    MeetingStateStore,
-    ParticipantContextProvider,
-  ],
+  imports: [forwardRef(() => LLMFeedbackModule), AuthModule],
+  providers: [FeedbackGateway, FeedbackService, FeedbackGrpcServer],
   controllers: [FeedbackController],
-  exports: [FeedbackService, FeedbackGrpcServer, TextAnalysisFeedbackService],
+  exports: [FeedbackService, FeedbackGrpcServer, FeedbackGateway],
 })
 export class FeedbackModule {}

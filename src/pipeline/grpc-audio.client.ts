@@ -12,6 +12,8 @@ interface AudioChunk {
   channels: number;
   timestamp_ms: number;
   sequence: number;
+  tenant_id: string;
+  user_id: string;
 }
 
 interface StreamAudioResponse {
@@ -91,8 +93,7 @@ export class GrpcAudioClient implements OnModuleDestroy {
 
     // host:port — infer TLS for public HTTPS edges; plain gRPC for :50051 / private mesh
     const lastColon = value.lastIndexOf(':');
-    const maybeHost =
-      lastColon > 0 ? value.slice(0, lastColon) : value;
+    const maybeHost = lastColon > 0 ? value.slice(0, lastColon) : value;
     const maybePort = lastColon > 0 ? value.slice(lastColon + 1) : '';
     const isPrivateRailway = /\.railway\.internal$/i.test(maybeHost);
     if (isPrivateRailway) {
