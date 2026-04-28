@@ -83,7 +83,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
           const claims = this.jwt.verify(token, 'access');
           ctx = Object.freeze({
             userId: claims.sub,
-            tenantId: claims.tid,
+            tenantId: claims.tid!,
             membershipId: claims.mid ?? null,
             role: claims.role,
             jti: claims.jti,

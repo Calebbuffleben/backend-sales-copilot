@@ -96,8 +96,8 @@ export class AuthController {
   ): Promise<{
     token: string;
     tokenType: 'Bearer';
-    tenantId: string;
-    tenantSlug: string;
+    tenantId: null;
+    tenantSlug: null;
     expiresAt: number;
     label: string | null;
   }> {

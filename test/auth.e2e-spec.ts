@@ -228,18 +228,19 @@ describe('Multi-tenant auth + membership + billing (e2e)', () => {
   // ------------------------------------------------------------------- //
 
   it('POST /auth/service-token requires bootstrap key; result is not usable on HTTP', async () => {
-    await registerOwner('svc', 'svc-owner@acme.test');
     await request(app.getHttpServer())
       .post('/auth/service-token')
-      .send({ tenantSlug: 'svc' })
+      .send({})
       .expect(403);
     const minted = await request(app.getHttpServer())
       .post('/auth/service-token')
       .set('x-service-bootstrap-key', 'test-bootstrap-key-xyz')
-      .send({ tenantSlug: 'svc', label: 'python', ttlSeconds: 120 })
+      .send({ label: 'python', ttlSeconds: 120 })
       .expect(200)
       .then((r) => r.body);
     expect(minted.token).toBeTruthy();
+    expect(minted.tenantId).toBeNull();
+    expect(minted.tenantSlug).toBeNull();
     await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${minted.token}`)

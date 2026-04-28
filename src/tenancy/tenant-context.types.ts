@@ -3,9 +3,9 @@ import type { TokenRole } from '../auth/role.types';
 /**
  * Authoritative identity + tenant context derived from a verified JWT.
  *
- * `tenantId` is always `token.tid` — never a client-provided value.
- * `membershipId` is `null` for SERVICE tokens (which are tenant-scoped
- * via `token.tid` but do not belong to a user membership).
+ * For human tokens, `tenantId` is `token.tid` — never a client-provided value.
+ * For SERVICE tokens, gRPC handlers must validate `x-tenant-id` and then set
+ * the effective tenant here. `membershipId` is `null` for SERVICE tokens.
  */
 export interface TenantContext {
   userId: string;

@@ -9,6 +9,7 @@ import type { TenantContext } from '../tenancy/tenant-context.types';
 import { TenantMismatchError } from '../tenancy/tenant-context.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
+import { TenantStatus } from '@prisma/client';
 
 type UnaryCallback<T> = (error: grpc.ServiceError | null, response?: T) => void;
 
@@ -29,11 +30,11 @@ interface AuthenticatedCall<TReq> {
  *
  * Authentication:
  *  - `authorization: Bearer <jwt>` MUST be present. Both user and service
- *    tokens are accepted — but the tenantId is ALWAYS derived from the
- *    token (`token.tid`).
- *  - `x-tenant-id` metadata is strictly optional. If present it MUST equal
- *    `token.tid`; mismatches are rejected with `PERMISSION_DENIED` and
- *    persisted in `AuditLog` for incident response.
+ *    tokens are accepted.
+ *  - For human access tokens, tenantId is derived from `token.tid`; optional
+ *    `x-tenant-id` must match.
+ *  - For SERVICE tokens, `x-tenant-id` is mandatory, must point to an ACTIVE
+ *    tenant, and becomes the effective tenant for the call.
  *
  * Context propagation follows the rules in docs/auth-architecture.md:
  *  - AsyncLocalStorage is NEVER used here. Streaming gRPC callbacks run in
@@ -55,9 +56,9 @@ export class FeedbackGrpcServer {
     };
   }
 
-  private authenticate(
+  private async authenticate(
     metadata: grpc.Metadata,
-  ): { ctx: TenantContext; claimedTenantId: string | null } {
+  ): Promise<{ ctx: TenantContext; claimedTenantId: string | null }> {
     const authValues = metadata.get('authorization');
     const authHeader =
       authValues.length > 0 ? String(authValues[0]).trim() : '';
@@ -104,6 +105,15 @@ export class FeedbackGrpcServer {
           { code: grpc.status.UNAUTHENTICATED },
         );
       }
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: claimedTenantId },
+        select: { id: true, status: true },
+      });
+      if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
+        throw Object.assign(new Error('unknown or inactive tenant'), {
+          code: grpc.status.PERMISSION_DENIED,
+        });
+      }
       const ctx: TenantContext = Object.freeze({
         userId: claims.sub,
         tenantId: claimedTenantId,
@@ -117,7 +127,7 @@ export class FeedbackGrpcServer {
 
     const ctx: TenantContext = Object.freeze({
       userId: claims.sub,
-      tenantId: claims.tid,
+      tenantId: claims.tid!,
       membershipId: claims.mid ?? null,
       role: claims.role,
       jti: claims.jti,
@@ -142,7 +152,7 @@ export class FeedbackGrpcServer {
   ) {
     let ctx: TenantContext;
     try {
-      ({ ctx: call.user } = this.authenticate(call.metadata));
+      ({ ctx: call.user } = await this.authenticate(call.metadata));
       ctx = call.user as TenantContext;
     } catch (err) {
       const code = (err as { code?: number }).code ?? grpc.status.INTERNAL;

@@ -315,14 +315,14 @@ export class AuthService {
 
       if (
         !stored ||
-        stored.tenantId !== claims.tid ||
+        stored.tenantId !== claims.tid! ||
         stored.userId !== claims.sub
       ) {
         if (stored) {
           await this.revokeFamily(stored.familyId, 'refresh.mismatch');
         }
         await this.writeAuditLog(
-          claims.tid,
+          claims.tid!,
           claims.sub,
           'auth.refresh.mismatch',
           meta,
@@ -542,10 +542,11 @@ export class AuthService {
   }
 
   /**
-   * Mint a short-lived service token scoped to a single tenant.
+   * Mint a short-lived global service token for backend workers.
    *
    * Protected at the controller layer by a shared `SERVICE_BOOTSTRAP_KEY`.
-   * Service tokens do NOT carry `mid` (they have no Membership row).
+   * Service tokens do NOT carry `mid` or a tenant claim; tenant isolation for
+   * worker-originated gRPC calls is enforced per request via `x-tenant-id`.
    */
   async mintServiceToken(
     dto: ServiceTokenDto,
@@ -553,12 +554,11 @@ export class AuthService {
   ): Promise<{
     token: string;
     tokenType: 'Bearer';
-    tenantId: string;
-    tenantSlug: string;
+    tenantId: null;
+    tenantSlug: null;
     expiresAt: number;
     label: string | null;
   }> {
-    const tenantSlug = dto.tenantSlug.trim().toLowerCase();
     const label = dto.label?.trim().slice(0, 128) || null;
 
     const maxTtl = DEFAULT_SERVICE_TTL_SECONDS * 6;
@@ -568,18 +568,10 @@ export class AuthService {
     const ttlSeconds = Math.min(Math.max(requested, 60), maxTtl);
 
     return this.tenantCtx.runWithTenantBypass(async () => {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { slug: tenantSlug },
-      });
-      if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
-        throw new BadRequestException('Unknown or inactive tenant');
-      }
-
       const jti = randomUUID();
       const now = Math.floor(Date.now() / 1000);
       const token = this.jwt.sign({
-        subject: `service:${tenant.slug}`,
-        tenantId: tenant.id,
+        subject: `service:${label || 'backend-worker'}`,
         role: 'SERVICE' as TokenRole,
         jti,
         type: 'service',
@@ -588,7 +580,7 @@ export class AuthService {
       });
 
       await this.writeAuditLog(
-        tenant.id,
+        null,
         null,
         'auth.service_token.mint',
         meta,
@@ -598,8 +590,8 @@ export class AuthService {
       return {
         token,
         tokenType: 'Bearer' as const,
-        tenantId: tenant.id,
-        tenantSlug: tenant.slug,
+        tenantId: null,
+        tenantSlug: null,
         expiresAt: (now + ttlSeconds) * 1000,
         label,
       };

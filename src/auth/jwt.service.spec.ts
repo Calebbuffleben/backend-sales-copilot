@@ -99,23 +99,38 @@ describe('AuthJwtService (HS256 dev fallback)', () => {
       },
     );
     expect(() => svc.verify(token, 'access')).toThrow(
-      /JWT payload missing membership id/,
+      /JWT payload missing tenant id \(tid\) or membership id \(mid\)/,
     );
   });
 
-  it('allows a service token without mid', () => {
+  it('allows a global service token without tid or mid', () => {
     const svc = new AuthJwtService();
     const token = svc.sign({
       subject: 'service:ingestion',
-      tenantId: 'tenant-abc',
       role: 'SERVICE',
       jti: 'svc-1',
       type: 'service',
       ttlSeconds: 60,
     });
     const claims = svc.verify(token, 'service');
+    expect(claims.tid).toBeUndefined();
     expect(claims.mid).toBeUndefined();
     expect(claims.role).toBe('SERVICE');
+  });
+
+  it('keeps accepting legacy service tokens with tid but without mid', () => {
+    const svc = new AuthJwtService();
+    const token = svc.sign({
+      subject: 'service:ingestion',
+      tenantId: 'tenant-abc',
+      role: 'SERVICE',
+      jti: 'svc-legacy',
+      type: 'service',
+      ttlSeconds: 60,
+    });
+    const claims = svc.verify(token, 'service');
+    expect(claims.tid).toBe('tenant-abc');
+    expect(claims.mid).toBeUndefined();
   });
 
   it('rejects a service token that carries a mid', () => {
