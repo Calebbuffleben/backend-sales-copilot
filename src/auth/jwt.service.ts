@@ -6,7 +6,8 @@ export type JwtTokenType = 'access' | 'refresh' | 'service';
 
 export interface BaseJwtClaims {
   sub: string;
-  tid: string;
+  /** Tenant ID. Required for human access/refresh tokens; optional for SERVICE. */
+  tid?: string;
   /**
    * Membership ID — present on `access` and `refresh` tokens issued for a
    * human user. Absent (undefined) on `service` tokens, which have no
@@ -24,7 +25,7 @@ export interface BaseJwtClaims {
 
 export interface SignOptions {
   subject: string;
-  tenantId: string;
+  tenantId?: string;
   membershipId?: string;
   role: TokenRole;
   jti: string;
@@ -78,7 +79,6 @@ export class AuthJwtService {
   sign(opts: SignOptions): string {
     const payload: Omit<BaseJwtClaims, 'iat' | 'exp'> = {
       sub: opts.subject,
-      tid: opts.tenantId,
       mid: opts.membershipId,
       role: opts.role,
       jti: opts.jti,
@@ -86,6 +86,9 @@ export class AuthJwtService {
       iss: this.issuer,
       aud: this.audience,
     };
+    if (opts.tenantId) {
+      payload.tid = opts.tenantId;
+    }
     return jwt.sign(payload, this.signKey, {
       algorithm: this.algorithm,
       expiresIn: opts.ttlSeconds,
@@ -109,12 +112,12 @@ export class AuthJwtService {
       throw new Error('JWT payload is not an object');
     }
     const claims = decoded as BaseJwtClaims;
-    if (!claims.sub || !claims.tid || !claims.role || !claims.jti || !claims.type) {
-      throw new Error('JWT payload missing required claims (sub/tid/role/jti/type)');
+    if (!claims.sub || !claims.role || !claims.jti || !claims.type) {
+      throw new Error('JWT payload missing required claims (sub/role/jti/type)');
     }
     // Access/refresh tokens must carry `mid`; service tokens must NOT.
-    if (claims.type !== 'service' && !claims.mid) {
-      throw new Error('JWT payload missing membership id (mid)');
+    if (claims.type !== 'service' && (!claims.mid || !claims.tid)) {
+      throw new Error('JWT payload missing tenant id (tid) or membership id (mid)');
     }
     if (claims.type === 'service' && claims.mid) {
       throw new Error('Service token must not carry a membership id');

@@ -31,6 +31,17 @@ describe('FeedbackGrpcServer.authenticate', () => {
           auditCalls.push(args);
         }),
       },
+      tenant: {
+        findUnique: jest.fn(async ({ where }: { where: { id: string } }) => {
+          if (where.id === 'tenant-inactive') {
+            return { id: where.id, status: 'INACTIVE' };
+          }
+          if (where.id === 'tenant-missing') {
+            return null;
+          }
+          return { id: where.id, status: 'ACTIVE' };
+        }),
+      },
     };
     const tenantCtx = new TenantContextService();
     const llm = {
@@ -49,23 +60,27 @@ describe('FeedbackGrpcServer.authenticate', () => {
   // assert the security contract without opening a test-only public API.
   const callAuth = (server: FeedbackGrpcServer, metadata: grpc.Metadata) =>
     (server as unknown as {
-      authenticate: (m: grpc.Metadata) => unknown;
+      authenticate: (m: grpc.Metadata) => Promise<unknown>;
     }).authenticate(metadata);
 
-  it('rejects calls with no authorization metadata', () => {
+  it('rejects calls with no authorization metadata', async () => {
     const { server } = buildServer();
     const md = new grpc.Metadata();
-    expect(() => callAuth(server, md)).toThrow(/missing authorization metadata/);
+    await expect(callAuth(server, md)).rejects.toThrow(
+      /missing authorization metadata/,
+    );
   });
 
-  it('rejects calls with a non-Bearer scheme', () => {
+  it('rejects calls with a non-Bearer scheme', async () => {
     const { server } = buildServer();
     const md = new grpc.Metadata();
     md.add('authorization', 'Basic abcd');
-    expect(() => callAuth(server, md)).toThrow(/invalid authorization scheme/);
+    await expect(callAuth(server, md)).rejects.toThrow(
+      /invalid authorization scheme/,
+    );
   });
 
-  it('accepts an access token and derives tenantId from token.tid', () => {
+  it('accepts an access token and derives tenantId from token.tid', async () => {
     const { server, jwt } = buildServer();
     const token = jwt.sign({
       subject: 'user-1',
@@ -78,7 +93,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     });
     const md = new grpc.Metadata();
     md.add('authorization', `Bearer ${token}`);
-    const result = callAuth(server, md) as {
+    const result = (await callAuth(server, md)) as {
       ctx: { tenantId: string; userId: string; isService?: boolean };
     };
     expect(result.ctx.userId).toBe('user-1');
@@ -86,7 +101,7 @@ describe('FeedbackGrpcServer.authenticate', () => {
     expect(result.ctx.isService).toBeFalsy();
   });
 
-  it('accepts an access token when x-tenant-id matches (redundant hint)', () => {
+  it('accepts an access token when x-tenant-id matches (redundant hint)', async () => {
     const { server, jwt } = buildServer();
     const token = jwt.sign({
       subject: 'user-1',
@@ -100,11 +115,11 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const md = new grpc.Metadata();
     md.add('authorization', `Bearer ${token}`);
     md.add('x-tenant-id', 'tenant-1');
-    const result = callAuth(server, md) as { ctx: { tenantId: string } };
+    const result = (await callAuth(server, md)) as { ctx: { tenantId: string } };
     expect(result.ctx.tenantId).toBe('tenant-1');
   });
 
-  it('rejects access tokens when x-tenant-id does not match token.tid', () => {
+  it('rejects access tokens when x-tenant-id does not match token.tid', async () => {
     const { server, jwt, prisma } = buildServer();
     const token = jwt.sign({
       subject: 'user-1',
@@ -118,18 +133,14 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const md = new grpc.Metadata();
     md.add('authorization', `Bearer ${token}`);
     md.add('x-tenant-id', 'tenant-evil');
-    expect(() => callAuth(server, md)).toThrow(TenantMismatchError);
-    // Audit log fires asynchronously; flush microtasks.
-    return Promise.resolve().then(() => {
-      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-    });
+    await expect(callAuth(server, md)).rejects.toThrow(TenantMismatchError);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
-  it('service tokens REQUIRE x-tenant-id and adopt it as the effective tenant', () => {
+  it('service tokens REQUIRE x-tenant-id and adopt it as the effective tenant', async () => {
     const { server, jwt } = buildServer();
     const svcToken = jwt.sign({
       subject: 'python-pipeline',
-      tenantId: 'tenant-source-ignored',
       role: 'SERVICE',
       jti: 'svc-1',
       type: 'service',
@@ -137,14 +148,14 @@ describe('FeedbackGrpcServer.authenticate', () => {
     });
     const mdMissing = new grpc.Metadata();
     mdMissing.add('authorization', `Bearer ${svcToken}`);
-    expect(() => callAuth(server, mdMissing)).toThrow(
+    await expect(callAuth(server, mdMissing)).rejects.toThrow(
       /service tokens require x-tenant-id/,
     );
 
     const md = new grpc.Metadata();
     md.add('authorization', `Bearer ${svcToken}`);
     md.add('x-tenant-id', 'tenant-42');
-    const result = callAuth(server, md) as {
+    const result = (await callAuth(server, md)) as {
       ctx: { tenantId: string; role: string; isService?: boolean };
     };
     expect(result.ctx.tenantId).toBe('tenant-42');
@@ -152,7 +163,72 @@ describe('FeedbackGrpcServer.authenticate', () => {
     expect(result.ctx.isService).toBe(true);
   });
 
-  it('rejects refresh tokens (wrong type)', () => {
+  it('rejects service tokens for missing or inactive tenants', async () => {
+    const { server, jwt } = buildServer();
+    const svcToken = jwt.sign({
+      subject: 'python-pipeline',
+      role: 'SERVICE',
+      jti: 'svc-unknown',
+      type: 'service',
+      ttlSeconds: 120,
+    });
+
+    const mdMissingTenant = new grpc.Metadata();
+    mdMissingTenant.add('authorization', `Bearer ${svcToken}`);
+    mdMissingTenant.add('x-tenant-id', 'tenant-missing');
+    await expect(callAuth(server, mdMissingTenant)).rejects.toThrow(
+      /unknown or inactive tenant/,
+    );
+
+    const mdInactiveTenant = new grpc.Metadata();
+    mdInactiveTenant.add('authorization', `Bearer ${svcToken}`);
+    mdInactiveTenant.add('x-tenant-id', 'tenant-inactive');
+    await expect(callAuth(server, mdInactiveTenant)).rejects.toThrow(
+      /unknown or inactive tenant/,
+    );
+  });
+
+  it('rejects service calls when payload tenant_id differs from x-tenant-id', async () => {
+    const { server, jwt } = buildServer();
+    const svcToken = jwt.sign({
+      subject: 'python-pipeline',
+      role: 'SERVICE',
+      jti: 'svc-mismatch',
+      type: 'service',
+      ttlSeconds: 120,
+    });
+    const metadata = new grpc.Metadata();
+    metadata.add('authorization', `Bearer ${svcToken}`);
+    metadata.add('x-tenant-id', 'tenant-42');
+
+    const callback = jest.fn();
+    await server.publishFeedback(
+      {
+        metadata,
+        request: {
+          meeting_id: 'm1',
+          participant_id: 'p1',
+          feedback_type: 'text_analysis_ingress',
+          severity: 'info',
+          ts_ms: 1,
+          window_start_ms: 1,
+          window_end_ms: 2,
+          message: 'msg',
+          transcript_text: 'hello',
+          tenant_id: 'tenant-other',
+          analysis: { direct_feedback: 'feedback' },
+        },
+      } as any,
+      callback,
+    );
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      code: grpc.status.PERMISSION_DENIED,
+    });
+  });
+
+  it('rejects refresh tokens (wrong type)', async () => {
     const { server, jwt } = buildServer();
     const refresh = jwt.sign({
       subject: 'u',
@@ -165,6 +241,6 @@ describe('FeedbackGrpcServer.authenticate', () => {
     });
     const md = new grpc.Metadata();
     md.add('authorization', `Bearer ${refresh}`);
-    expect(() => callAuth(server, md)).toThrow(/unexpected token type/);
+    await expect(callAuth(server, md)).rejects.toThrow(/unexpected token type/);
   });
 });

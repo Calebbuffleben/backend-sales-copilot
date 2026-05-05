@@ -119,9 +119,10 @@ e [`docs/tenancy.md`](../docs/tenancy.md). Resumo:
   com rate limit dedicado via `@nestjs/throttler`.
 - **Tokens**: RS256 em produção (`JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`), HS256
   (`JWT_SECRET`) somente fora de produção. Access curto, refresh rotativo com
-  família (`RefreshToken.familyId` / `jti`). Tokens de serviço são cunhados
-  por tenant via `POST /auth/service-token` com TTL clamped a
-  `[60s, 6 × DEFAULT_SERVICE_TTL_SECONDS]` e registrados em `AuditLog`.
+  família (`RefreshToken.familyId` / `jti`). Tokens de serviço são globais
+  (sem tenant obrigatório), cunhados via `POST /auth/service-token` com TTL
+  clamped a `[60s, 6 × DEFAULT_SERVICE_TTL_SECONDS]` e registrados em
+  `AuditLog`.
 - **Guards globais**: `JwtAuthGuard` + `RolesGuard` via `APP_GUARD`. Endpoints
   públicos usam `@Public()`. O guard evita re-verificar o JWT quando o
   `TenantContextMiddleware` já populou `req.user`.
@@ -130,15 +131,16 @@ e [`docs/tenancy.md`](../docs/tenancy.md). Resumo:
   `AUTH_LOCKOUT_EMAIL_THRESHOLD` (5) ou `AUTH_LOCKOUT_IP_THRESHOLD` (20) o
   endpoint responde `401 Too many failed attempts`. Um login bem-sucedido
   reseta o contador e escreve `auth.login.ok`.
-- **Tenancy**: `tenantId` sempre vem do JWT (`token.tid`). Middleware Prisma
-  (`prisma-tenancy.middleware.ts`) injeta o filtro automaticamente;
+- **Tenancy**: para usuários humanos, `tenantId` sempre vem do JWT
+  (`token.tid`). Middleware Prisma (`prisma-tenancy.middleware.ts`) injeta
+  o filtro automaticamente;
   `x-tenant-id` do cliente é apenas hint redundante — validado no
   `TenantContextMiddleware` (HTTP), no gateway (Socket.IO), no upgrade
   (`/egress-audio`) e em `FeedbackGrpcServer.authenticate` (gRPC). Tokens
-  `role=SERVICE` usados pelo Python exigem `x-tenant-id` obrigatório (que
-  vira o tenant efetivo da chamada — desvio deliberado do plano original,
-  justificado em `docs/auth-architecture.md`). Tenant mismatch é auditado
-  com `action='tenant_mismatch'` e `target` transport-specific.
+  `role=SERVICE` usados pelo Python são globais e exigem `x-tenant-id`
+  obrigatório; o backend valida que esse tenant está ativo e o usa como
+  tenant efetivo da chamada. Tenant mismatch é auditado com
+  `action='tenant_mismatch'` e `target` transport-specific.
 - **Hardening**: `helmet` + `ValidationPipe` global, `CORS_ORIGINS` allowlist
   obrigatório em produção (HTTP e Socket.IO), gRPC com TLS/mTLS
   (`GRPC_TLS_SERVER_CERT`, `GRPC_TLS_SERVER_KEY`, `GRPC_TLS_CLIENT_CA`).

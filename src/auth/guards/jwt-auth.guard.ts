@@ -78,7 +78,7 @@ export class JwtAuthGuard implements CanActivate {
 
     const ctx: TenantContext = Object.freeze({
       userId: claims.sub,
-      tenantId: claims.tid,
+      tenantId: claims.tid!,
       membershipId: claims.mid ?? null,
       role: claims.role,
       jti: claims.jti,

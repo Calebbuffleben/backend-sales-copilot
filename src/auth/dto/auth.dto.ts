@@ -54,12 +54,12 @@ export class LogoutDto {
 }
 
 export class ServiceTokenDto {
-  /** Tenant slug to mint the service token for. Required — service tokens
-   * are always scoped to a single tenant (matches `tid` claim). */
+  /** Deprecated. SERVICE tokens are global; tenants are selected per gRPC call. */
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(128)
-  tenantSlug!: string;
+  tenantSlug?: string;
 
   /** Optional label for audit log metadata (e.g. "python-service-prod"). */
   @IsOptional()
