@@ -29,5 +29,12 @@ export class PrismaService
   }
 }
 
+/**
+ * Declaration merge: ensures model delegates (e.g. `playbookTemplate`) appear on
+ * `PrismaService` for TypeScript when extending `PrismaClient` — matches generated
+ * `@prisma/client` after `prisma generate`.
+ */
+export interface PrismaService extends PrismaClient {}
+
 // Type assertion to ensure TypeScript recognizes PrismaClient methods
 export type PrismaServiceType = PrismaClient;

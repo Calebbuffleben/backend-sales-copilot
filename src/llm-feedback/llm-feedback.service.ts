@@ -1,6 +1,8 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { LLMIngressEvent } from '../feedback/feedback.mapper';
 import { FeedbackService } from '../feedback/feedback.service';
+import { PlaybookResolverService } from '../playbooks/playbook-resolver.service';
+import type { FeedbackPlaybookMetadata } from '../playbooks/playbook-metadata.contract';
 
 @Injectable()
 export class LLMFeedbackService {
@@ -9,6 +11,7 @@ export class LLMFeedbackService {
   constructor(
     @Inject(forwardRef(() => FeedbackService))
     private readonly feedbackService: FeedbackService,
+    private readonly playbookResolver: PlaybookResolverService,
   ) {}
 
   async handleIngress(event: LLMIngressEvent): Promise<void> {
@@ -48,6 +51,22 @@ export class LLMFeedbackService {
         // ignore malformed JSON; keep defaults
       }
 
+      let playbook: FeedbackPlaybookMetadata | undefined;
+      const playbooksEnabled = process.env.PLAYBOOKS_ENABLED === 'true';
+      if (playbooksEnabled) {
+        try {
+          playbook = await this.playbookResolver.resolve({
+            tenantId: event.tenantId,
+            playbookHintJson: event.analysis.playbookHintJson,
+          });
+        } catch (resolveErr) {
+          this.logger.warn(
+            `Playbook resolve failed (continuing without playbook): ${resolveErr instanceof Error ? resolveErr.message : resolveErr}`,
+          );
+          playbook = undefined;
+        }
+      }
+
       // Passa a bola para o FeedbackService que orquestra a persistencia DB
       // e consequentemente emite o broadcast de WebSockets via Gateway
       await this.feedbackService.createFeedback({
@@ -64,6 +83,7 @@ export class LLMFeedbackService {
           conversationStateJson: event.analysis.conversationStateJson,
           ...(spinPhase !== undefined ? { spinPhase } : {}),
           ...(spinRisk !== undefined ? { spinRisk } : {}),
+          ...(playbook ? { playbook } : {}),
         },
       });
     } catch (error) {

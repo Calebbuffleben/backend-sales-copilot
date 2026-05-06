@@ -13,6 +13,7 @@ import { LLMFeedbackModule } from './llm-feedback/llm-feedback.module';
 import { BillingModule } from './billing/billing.module';
 import { MembersModule } from './members/members.module';
 import { InvitationsModule } from './invitations/invitations.module';
+import { PlaybooksModule } from './playbooks/playbooks.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { InvitationsModule } from './invitations/invitations.module';
     BillingModule,
     MembersModule,
     InvitationsModule,
+    PlaybooksModule,
     FeedbackModule,
     EgressModule,
     PipelineModule,

@@ -152,7 +152,9 @@ e [`docs/tenancy.md`](../docs/tenancy.md). Resumo:
   `JWT_REFRESH_TTL_SECONDS` (default 604800),
   `ALLOW_SELF_SIGNUP`, `SERVICE_BOOTSTRAP_KEY`,
   `AUTH_LOCKOUT_WINDOW_SECONDS`, `AUTH_LOCKOUT_EMAIL_THRESHOLD`,
-  `AUTH_LOCKOUT_IP_THRESHOLD`, `CORS_ORIGINS`, `GRPC_TLS_*`.
+  `AUTH_LOCKOUT_IP_THRESHOLD`, `CORS_ORIGINS`, `GRPC_TLS_*`,
+  `PLAYBOOKS_ENABLED` (defina `true` para resolver `metadata.playbook` a partir de hints LLM + templates; omitido/falso desliga o resolver),
+  `PLAYBOOK_URL_ALLOWLIST` (CSV de hosts https permitidos em ações `open_url` dos playbooks; lista vazia bloqueia todas as URLs).
 
 ## Compile and run the project
 

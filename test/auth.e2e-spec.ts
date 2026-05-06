@@ -17,6 +17,7 @@
  *   - POST /invites/accept-public      — creates new User + Membership
  *   - POST /invites + seat exhaustion  — returns 402 with upgrade hint
  *   - POST /billing/upgrade            — admin only; unblocks new invites
+ *   - GET/POST/PATCH/DELETE /playbooks — admin CRUD; member 403; tenant isolation
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -30,6 +31,7 @@ import { FeedbackModule } from '../src/feedback/feedback.module';
 import { InvitationsModule } from '../src/invitations/invitations.module';
 import { LLMFeedbackModule } from '../src/llm-feedback/llm-feedback.module';
 import { MembersModule } from '../src/members/members.module';
+import { PlaybooksModule } from '../src/playbooks/playbooks.module';
 import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
@@ -67,6 +69,7 @@ describe('Multi-tenant auth + membership + billing (e2e)', () => {
         AuthModule,
         BillingModule,
         MembersModule,
+        PlaybooksModule,
         InvitationsModule,
         LLMFeedbackModule,
         FeedbackModule,
@@ -457,5 +460,164 @@ describe('Multi-tenant auth + membership + billing (e2e)', () => {
     expect(sub.seatsRemaining).toBe(2);
     expect(sub.planLimits.PRO).toBe(10);
     expect(sub.planLimits.ENTERPRISE).toBe(50);
+  });
+
+  // ------------------------------------------------------------------- //
+  // Playbooks (admin CRUD)                                               //
+  // ------------------------------------------------------------------- //
+
+  const sampleSteps = [
+    {
+      id: 'step1',
+      label: 'Copiar pergunta',
+      detail: 'Uso rápido',
+      action: { type: 'copy_text', payload: 'Qual o custo hoje?' },
+    },
+  ];
+
+  it('GET/POST/PATCH/DELETE /playbooks — owner CRUD + duplicate key 409', async () => {
+    const owner = await registerOwner('pb-co', 'owner@pb.test');
+    const headers = await authHeader(owner.accessToken);
+
+    const list0 = await request(app.getHttpServer())
+      .get('/playbooks')
+      .set(headers)
+      .expect(200)
+      .then((r) => r.body);
+    expect(list0).toEqual([]);
+
+    const created = await request(app.getHttpServer())
+      .post('/playbooks')
+      .set(headers)
+      .send({
+        key: 'spin_problem',
+        title: 'SPIN — problema',
+        description: 'Guia curto',
+        steps: sampleSteps,
+      })
+      .expect(201)
+      .then((r) => r.body);
+    expect(created.key).toBe('spin_problem');
+    expect(created.title).toBe('SPIN — problema');
+    expect(created.steps).toEqual(sampleSteps);
+
+    const list1 = await request(app.getHttpServer())
+      .get('/playbooks')
+      .set(headers)
+      .expect(200)
+      .then((r) => r.body);
+    expect(list1).toHaveLength(1);
+    expect(list1[0].key).toBe('spin_problem');
+
+    await request(app.getHttpServer())
+      .post('/playbooks')
+      .set(headers)
+      .send({
+        key: 'spin_problem',
+        title: 'Dup',
+        steps: sampleSteps,
+      })
+      .expect(409);
+
+    const updated = await request(app.getHttpServer())
+      .patch(`/playbooks/${created.id}`)
+      .set(headers)
+      .send({ title: 'SPIN — problema (v2)' })
+      .expect(200)
+      .then((r) => r.body);
+    expect(updated.title).toBe('SPIN — problema (v2)');
+
+    await request(app.getHttpServer())
+      .delete(`/playbooks/${created.id}`)
+      .set(headers)
+      .expect(200);
+
+    const list2 = await request(app.getHttpServer())
+      .get('/playbooks')
+      .set(headers)
+      .expect(200)
+      .then((r) => r.body);
+    expect(list2).toHaveLength(0);
+  });
+
+  it('POST /playbooks rejects invalid steps payload (validation)', async () => {
+    const owner = await registerOwner('pb-val', 'val@pb.test');
+    const headers = await authHeader(owner.accessToken);
+
+    await request(app.getHttpServer())
+      .post('/playbooks')
+      .set(headers)
+      .send({
+        key: 'bad',
+        title: 'Bad',
+        steps: [
+          {
+            id: 'x',
+            label: 'y',
+            action: { type: 'copy_text' },
+          },
+        ],
+      })
+      .expect(400);
+  });
+
+  it('POST /playbooks is admin-only; MEMBER gets 403', async () => {
+    const owner = await registerOwner('pb-guard', 'own@guardpb.test');
+    const headers = await authHeader(owner.accessToken);
+    const inv = await request(app.getHttpServer())
+      .post('/invites')
+      .set(headers)
+      .send({ email: 'mem@guardpb.test' })
+      .expect(201)
+      .then((r) => r.body);
+
+    await request(app.getHttpServer())
+      .post('/invites/accept-public')
+      .send({ token: inv.token, password: PASS, name: 'Mem' })
+      .expect(201);
+
+    const memberSession = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({
+        email: 'mem@guardpb.test',
+        password: PASS,
+        tenantSlug: 'pb-guard',
+      })
+      .expect(200)
+      .then((r) => r.body);
+
+    await request(app.getHttpServer())
+      .post('/playbooks')
+      .set({ Authorization: `Bearer ${memberSession.accessToken}` })
+      .send({
+        key: 'nope',
+        title: 'N',
+        steps: sampleSteps,
+      })
+      .expect(403);
+  });
+
+  it('PATCH /playbooks/:id from another tenant returns 404', async () => {
+    const a = await registerOwner('pb-a', 'a@iso.test');
+    const b = await registerOwner('pb-b', 'b@iso.test');
+    const headersA = await authHeader(a.accessToken);
+
+    const created = await request(app.getHttpServer())
+      .post('/playbooks')
+      .set(headersA)
+      .send({
+        key: 'k1',
+        title: 'T',
+        steps: sampleSteps,
+      })
+      .expect(201)
+      .then((r) => r.body);
+
+    const headersB = await authHeader(b.accessToken);
+    await request(app.getHttpServer())
+      .patch(`/playbooks/${created.id}`)
+      .set(headersB)
+      .send({ title: 'Hijack' })
+      .expect(404);
   });
 });
