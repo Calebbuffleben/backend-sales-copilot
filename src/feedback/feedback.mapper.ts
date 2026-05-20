@@ -8,6 +8,7 @@ export interface ProtoAnalysisPayload {
   samples_count?: number;
   speech_count?: number;
   mean_rms_dbfs?: number;
+  playbook_hint_json?: string;
 }
 
 export interface PublishFeedbackRequest {
@@ -33,6 +34,8 @@ export interface LLMAnalysisIngress {
   samplesCount?: number;
   speechCount?: number;
   meanRmsDbfs?: number;
+  /** Optional JSON string from Python (template key + variables). */
+  playbookHintJson?: string;
 }
 
 export interface LLMIngressEvent {
@@ -106,6 +109,7 @@ export function mapPublishFeedbackRequest(
       samplesCount: request.analysis?.samples_count,
       speechCount: request.analysis?.speech_count,
       meanRmsDbfs: request.analysis?.mean_rms_dbfs,
+      playbookHintJson: request.analysis?.playbook_hint_json?.trim() || undefined,
     },
   };
 }

@@ -2,7 +2,7 @@
  * In-memory PrismaService stand-in for e2e tests.
  *
  * Implements the slice of Prisma used by AuthService, MembersService,
- * InvitationsService, BillingService and FeedbackService — enough to
+ * InvitationsService, BillingService, FeedbackService and PlaybookTemplatesService
  * exercise the full HTTP/auth/membership stack without a real Postgres.
  *
  * This is intentionally narrow: if you touch a new Prisma call path in
@@ -113,6 +113,17 @@ interface FeedbackEventRow {
   expiresAt: Date | null;
 }
 
+interface PlaybookTemplateRow {
+  id: Id;
+  tenantId: Id;
+  key: string;
+  title: string;
+  description: string | null;
+  steps: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 function uid(prefix = ''): string {
   return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 }
@@ -161,6 +172,15 @@ function matchWhere<T extends Record<string, any>>(
       }
       continue;
     }
+    if (key === 'tenantId_key' && value && typeof value === 'object') {
+      if (
+        (row as any).tenantId !== (value as any).tenantId ||
+        (row as any).key !== (value as any).key
+      ) {
+        return false;
+      }
+      continue;
+    }
     if (value && typeof value === 'object' && !(value instanceof Date)) {
       // Unsupported deep filter — fall through and compare loosely.
       if (JSON.stringify(row[key]) !== JSON.stringify(value)) return false;
@@ -180,6 +200,7 @@ export function createInMemoryPrismaFake() {
   const refreshTokens: RefreshTokenRow[] = [];
   const auditLogs: AuditLogRow[] = [];
   const feedbackEvents: FeedbackEventRow[] = [];
+  const playbookTemplates: PlaybookTemplateRow[] = [];
 
   const api = {
     async $connect() {},
@@ -497,6 +518,63 @@ export function createInMemoryPrismaFake() {
       },
     },
 
+    // -------------------------- PlaybookTemplate ---------------------- //
+    playbookTemplate: {
+      async findUnique({ where }: any) {
+        return playbookTemplates.find((p) => matchWhere(p, where)) ?? null;
+      },
+      async findFirst({ where }: any) {
+        return playbookTemplates.find((p) => matchWhere(p, where)) ?? null;
+      },
+      async findMany({ where, orderBy }: any) {
+        let rows = playbookTemplates.filter((p) => matchWhere(p, where));
+        if (orderBy?.key === 'asc') {
+          rows = rows.slice().sort((a, b) => a.key.localeCompare(b.key));
+        }
+        return rows;
+      },
+      async create({ data }: any) {
+        if (
+          playbookTemplates.some(
+            (p) => p.tenantId === data.tenantId && p.key === data.key,
+          )
+        ) {
+          const err = new Error('Unique constraint failed');
+          (err as { code?: string }).code = 'P2002';
+          throw err;
+        }
+        const row: PlaybookTemplateRow = {
+          id: uid('pbt_'),
+          tenantId: data.tenantId,
+          key: data.key,
+          title: data.title,
+          description: data.description ?? null,
+          steps: data.steps,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        playbookTemplates.push(row);
+        return row;
+      },
+      async update({ where, data }: any) {
+        const idx = playbookTemplates.findIndex((p) => matchWhere(p, where));
+        if (idx < 0) throw new Error('playbookTemplate not found');
+        const cur = playbookTemplates[idx];
+        playbookTemplates[idx] = {
+          ...cur,
+          ...data,
+          updatedAt: new Date(),
+        };
+        return playbookTemplates[idx];
+      },
+      async delete({ where }: any) {
+        const idx = playbookTemplates.findIndex((p) => matchWhere(p, where));
+        if (idx < 0) throw new Error('playbookTemplate not found');
+        const [removed] = playbookTemplates.splice(idx, 1);
+        return removed;
+      },
+    },
+
     _dumpTenants: () => tenants.slice(),
     _dumpUsers: () => users.slice(),
     _dumpMemberships: () => memberships.slice(),
@@ -505,6 +583,7 @@ export function createInMemoryPrismaFake() {
     _dumpRefreshTokens: () => refreshTokens.slice(),
     _dumpAuditLogs: () => auditLogs.slice(),
     _dumpFeedbackEvents: () => feedbackEvents.slice(),
+    _dumpPlaybookTemplates: () => playbookTemplates.slice(),
   };
 
   return api;
