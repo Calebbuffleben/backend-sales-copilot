@@ -7,6 +7,7 @@ export type AudioChunkMeta = {
   userId?: string;
   meetingId: string;
   participant: string;
+  participantRole?: string;
   track: string;
   sampleRate: number; // Hz
   channels: number; // 1 or 2
@@ -133,6 +134,7 @@ export class PipelineService {
         sequence: seq,
         tenant_id: meta.tenantId,
         user_id: meta.userId ?? '',
+        participant_role: meta.participantRole ?? 'unknown',
       };
 
       const t3_ready_to_send = Date.now();

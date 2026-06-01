@@ -81,6 +81,7 @@ export class LLMFeedbackService {
         message: event.analysis.directFeedback,
         metadata: {
           conversationStateJson: event.analysis.conversationStateJson,
+          ...(event.participantRole ? { participantRole: event.participantRole } : {}),
           ...(spinPhase !== undefined ? { spinPhase } : {}),
           ...(spinRisk !== undefined ? { spinRisk } : {}),
           ...(playbook ? { playbook } : {}),

@@ -14,6 +14,10 @@ import {
   requireTenant,
 } from '../tenancy/tenant-context.service';
 import type { TenantContext } from '../tenancy/tenant-context.types';
+import {
+  parseParticipantRole,
+  type ParticipantRole,
+} from './egress-audio.lib';
 
 interface EgressConnection {
   ws: WebSocket;
@@ -23,6 +27,7 @@ interface EgressConnection {
   room: string;
   meetingId: string;
   participant: string;
+  participantRole: ParticipantRole;
   track: string;
   sampleRate: number;
   channels: number;
@@ -124,6 +129,16 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     );
     const channels = parseInt(url.searchParams.get('channels') || '1', 10);
     const claimedTenantId = url.searchParams.get('tenantId') || '';
+    const rawParticipantRole = url.searchParams.get('participantRole');
+    const participantRole = parseParticipantRole(rawParticipantRole);
+    if (
+      rawParticipantRole &&
+      rawParticipantRole.trim().toLowerCase() !== participantRole
+    ) {
+      this.logger.warn(
+        `WS /egress-audio invalid participantRole=${rawParticipantRole} → using ${participantRole}`,
+      );
+    }
 
     if (!meetingId) {
       this.logger.error('Missing required query parameter: meetingId');
@@ -148,6 +163,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       room: `${ctx.tenantId}:${meetingId}`,
       meetingId,
       participant,
+      participantRole,
       track,
       sampleRate,
       channels,
@@ -161,7 +177,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     this.connections.set(ws, connection);
 
     this.logger.log(
-      `WS /egress-audio connected | tenant=${ctx.tenantId} user=${ctx.userId} meetingId=${meetingId} | participant=${participant} | track=${track} | ${sampleRate}Hz/${channels}ch`,
+      `WS /egress-audio connected | tenant=${ctx.tenantId} user=${ctx.userId} meetingId=${meetingId} | participant=${participant} | participantRole=${participantRole} | track=${track} | ${sampleRate}Hz/${channels}ch`,
     );
 
     // ⚠️ Context capture via closure — NEVER re-read tenantId from the URL or
@@ -228,6 +244,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       userId: connection.ctx.userId,
       meetingId: connection.meetingId,
       participant: connection.participant,
+      participantRole: connection.participantRole,
       track: connection.track,
       sampleRate: connection.sampleRate,
       channels: connection.channels,
