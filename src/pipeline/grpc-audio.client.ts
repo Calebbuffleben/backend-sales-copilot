@@ -14,6 +14,7 @@ interface AudioChunk {
   sequence: number;
   tenant_id: string;
   user_id: string;
+  participant_role?: string;
 }
 
 interface StreamAudioResponse {
