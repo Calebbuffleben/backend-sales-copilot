@@ -10,7 +10,7 @@ export class OpsService {
   ) {}
 
   liveMeetings() {
-    return this.tenantCtx.runWithTenantBypass(() =>
+    return this.tenantCtx.runWithTenantBypass(async () =>
       this.prisma.session.findMany({
         where: {
           OR: [
@@ -127,7 +127,7 @@ export class OpsService {
   }
 
   recentFeedbacks(limit = 100) {
-    return this.tenantCtx.runWithTenantBypass(() =>
+    return this.tenantCtx.runWithTenantBypass(async () =>
       this.prisma.feedbackEvent.findMany({
         orderBy: { ts: 'desc' },
         take: Math.min(Math.max(limit, 1), 200),
@@ -143,7 +143,7 @@ export class OpsService {
     q?: string;
     limit?: number;
   }) {
-    return this.tenantCtx.runWithTenantBypass(() =>
+    return this.tenantCtx.runWithTenantBypass(async () =>
       this.prisma.operationalEvent.findMany({
         where: {
           meetingId: query.meetingId,

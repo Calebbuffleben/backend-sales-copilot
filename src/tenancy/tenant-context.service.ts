@@ -37,9 +37,14 @@ export class TenantContextService {
    * enforcement — e.g. auth bootstrap (tenant creation, global email
    * lookup during login when callers explicitly pass tenantId to Prisma).
    * Use sparingly. Always prefer passing `tenantId` explicitly.
+   *
+   * The callback is run inside an `async` ALS scope so Prisma queries that
+   * return a Promise still see bypass active until they settle. Do not use a
+   * sync callback that only *returns* a Promise without `async`/`await` in
+   * the callback body — that drops bypass before the query runs.
    */
-  runWithTenantBypass<T>(fn: () => T): T {
-    return this.bypassStorage.run(true, fn);
+  runWithTenantBypass<T>(fn: () => T | Promise<T>): T | Promise<T> {
+    return this.bypassStorage.run(true, async () => fn());
   }
 
   isBypassActive(): boolean {

@@ -34,6 +34,18 @@ describe('TenantContextService (HTTP ALS)', () => {
     });
     expect(svc.isBypassActive()).toBe(false);
   });
+
+  it('keeps bypass active until an async callback settles', async () => {
+    const svc = new TenantContextService();
+    const seen: boolean[] = [];
+    await svc.runWithTenantBypass(async () => {
+      seen.push(svc.isBypassActive());
+      await Promise.resolve();
+      seen.push(svc.isBypassActive());
+    });
+    expect(seen).toEqual([true, true]);
+    expect(svc.isBypassActive()).toBe(false);
+  });
 });
 
 describe('tenant helpers', () => {
