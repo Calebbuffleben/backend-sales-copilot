@@ -1,10 +1,12 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 
+import { Public } from '../auth/decorators/public.decorator';
 import { PlatformAdminGuard } from '../platform-admin/platform-admin.guard';
 import { OpsService } from './ops.service';
 
 @Controller('ops')
+@Public()
 @UseGuards(PlatformAdminGuard)
 @SkipThrottle()
 export class OpsController {

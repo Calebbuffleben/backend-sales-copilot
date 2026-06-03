@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 
+import { Public } from '../auth/decorators/public.decorator';
 import {
   CreatePlatformInvitationDto,
   InviteListQueryDto,
@@ -22,6 +23,7 @@ import { PlatformAdminGuard } from './platform-admin.guard';
 import { PlatformAdminService } from './platform-admin.service';
 
 @Controller('platform-admin')
+@Public()
 @UseGuards(PlatformAdminGuard)
 @SkipThrottle()
 export class PlatformAdminController {
