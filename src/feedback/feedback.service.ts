@@ -8,6 +8,7 @@ import { logFeedbackTrace, makeFeedbackTraceId } from './feedback-trace';
 import type { Prisma } from '@prisma/client';
 import type { FeedbackType, FeedbackSeverity } from '@prisma/client';
 import { requireTenant } from '../tenancy/tenant-context.service';
+import { SessionsService } from '../sessions/sessions.service';
 
 // FeedbackEvent type from Prisma
 type FeedbackEvent = Prisma.FeedbackEventGetPayload<Record<string, never>>;
@@ -51,6 +52,7 @@ export class FeedbackService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly feedbackGateway: FeedbackGateway,
+    private readonly sessions: SessionsService,
   ) {}
 
   async createFeedback(payload: FeedbackPayload): Promise<FeedbackEvent> {
@@ -180,6 +182,20 @@ export class FeedbackService {
     });
 
     this.persistFeedbackAsync(payload, feedbackId, createdAt);
+    void this.sessions.recordEvent({
+      tenantId,
+      meetingId: payload.meetingId,
+      participantId: payload.participantId,
+      traceId,
+      stage: 'feedback.generated',
+      message: 'Feedback generated',
+      metadata: {
+        feedbackId,
+        type: payload.type,
+        severity: payload.severity,
+        message: payload.message,
+      },
+    }).catch(() => undefined);
 
     return {
       id: feedbackId,

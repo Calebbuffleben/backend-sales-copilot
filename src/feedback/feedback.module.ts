@@ -6,9 +6,10 @@ import { FeedbackGrpcServer } from './feedback.grpc.server';
 import { forwardRef } from '@nestjs/common';
 import { LLMFeedbackModule } from '../llm-feedback/llm-feedback.module';
 import { AuthModule } from '../auth/auth.module';
+import { SessionsModule } from '../sessions/sessions.module';
 
 @Module({
-  imports: [forwardRef(() => LLMFeedbackModule), AuthModule],
+  imports: [forwardRef(() => LLMFeedbackModule), AuthModule, SessionsModule],
   providers: [FeedbackGateway, FeedbackService, FeedbackGrpcServer],
   controllers: [FeedbackController],
   exports: [FeedbackService, FeedbackGrpcServer, FeedbackGateway],

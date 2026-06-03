@@ -14,6 +14,8 @@ import { BillingModule } from './billing/billing.module';
 import { MembersModule } from './members/members.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { PlaybooksModule } from './playbooks/playbooks.module';
+import { PlatformAdminModule } from './platform-admin/platform-admin.module';
+import { OpsModule } from './ops/ops.module';
 
 @Module({
   imports: [
@@ -27,6 +29,8 @@ import { PlaybooksModule } from './playbooks/playbooks.module';
     MembersModule,
     InvitationsModule,
     PlaybooksModule,
+    PlatformAdminModule,
+    OpsModule,
     FeedbackModule,
     EgressModule,
     PipelineModule,

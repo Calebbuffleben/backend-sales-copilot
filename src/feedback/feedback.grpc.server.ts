@@ -10,6 +10,7 @@ import { TenantMismatchError } from '../tenancy/tenant-context.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
 import { TenantStatus } from '@prisma/client';
+import { SessionsService } from '../sessions/sessions.service';
 
 type UnaryCallback<T> = (error: grpc.ServiceError | null, response?: T) => void;
 
@@ -48,6 +49,7 @@ export class FeedbackGrpcServer {
     private readonly jwt: AuthJwtService,
     private readonly prisma: PrismaService,
     private readonly tenantCtx: TenantContextService,
+    private readonly sessions: SessionsService,
   ) {}
 
   getImplementation() {
@@ -194,6 +196,19 @@ export class FeedbackGrpcServer {
       console.log(
         `[Step 7] Recebido payload do LLM via gRPC | tenant=${ctx.tenantId} | reunião=${ingressEvent.meetingId}`,
       );
+      void this.sessions.recordEvent({
+        tenantId: ctx.tenantId,
+        meetingId: ingressEvent.meetingId,
+        userId: ctx.userId,
+        participantId: ingressEvent.participantId,
+        traceId,
+        stage: 'gemini.started',
+        message: 'Gemini analysis started',
+        metadata: {
+          transcriptChars: ingressEvent.text.length,
+          hasDirectFeedback: !!ingressEvent.analysis.directFeedback,
+        },
+      }).catch(() => undefined);
       await this.llmFeedbackService.handleIngress(ingressEvent);
 
       const tIngressEndMs = Date.now();
@@ -212,6 +227,21 @@ export class FeedbackGrpcServer {
         handleMs: tIngressEndMs - tIngressStartMs,
         windowEndToBackendMs,
       });
+      void this.sessions.recordEvent({
+        tenantId: ctx.tenantId,
+        meetingId: ingressEvent.meetingId,
+        userId: ctx.userId,
+        participantId: ingressEvent.participantId,
+        traceId,
+        stage: 'gemini.finished',
+        message: 'Gemini analysis finished',
+        durationMs: tIngressEndMs - tIngressStartMs,
+        metadata: {
+          transcriptChars: ingressEvent.text.length,
+          hasDirectFeedback: !!ingressEvent.analysis.directFeedback,
+          windowEndToBackendMs,
+        },
+      }).catch(() => undefined);
 
       callback(null, {
         accepted: true,
