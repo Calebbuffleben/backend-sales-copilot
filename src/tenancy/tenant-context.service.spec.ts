@@ -26,10 +26,10 @@ describe('TenantContextService (HTTP ALS)', () => {
     expect(svc.getHttpContext()).toBeUndefined();
   });
 
-  it('bypass flag is scoped to its own runner', () => {
+  it('bypass flag is scoped to its own runner', async () => {
     const svc = new TenantContextService();
     expect(svc.isBypassActive()).toBe(false);
-    svc.runWithTenantBypass(() => {
+    await svc.runWithTenantBypass(() => {
       expect(svc.isBypassActive()).toBe(true);
     });
     expect(svc.isBypassActive()).toBe(false);

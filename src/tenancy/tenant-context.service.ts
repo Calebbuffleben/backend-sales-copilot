@@ -43,7 +43,7 @@ export class TenantContextService {
    * sync callback that only *returns* a Promise without `async`/`await` in
    * the callback body — that drops bypass before the query runs.
    */
-  runWithTenantBypass<T>(fn: () => T | Promise<T>): T | Promise<T> {
+  runWithTenantBypass<T>(fn: () => T | Promise<T>): Promise<T> {
     return this.bypassStorage.run(true, async () => fn());
   }
 

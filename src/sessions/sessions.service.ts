@@ -133,7 +133,7 @@ export class SessionsService {
     durationMs?: number | null;
     metadata?: Record<string, unknown>;
   }) {
-    return this.tenantCtx.runWithTenantBypass(() =>
+    return this.tenantCtx.runWithTenantBypass(async () =>
       this.prisma.operationalEvent.create({
         data: {
           service: input.service ?? 'backend',
