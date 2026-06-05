@@ -14,8 +14,10 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
 import {
   CreatePlatformInvitationDto,
+  CreateTenantDto,
   InviteListQueryDto,
   TenantListQueryDto,
+  UpdateTenantBillingDto,
   UpdateTenantDto,
   UserListQueryDto,
 } from './dto/platform-admin.dto';
@@ -34,6 +36,11 @@ export class PlatformAdminController {
     return this.admin.listTenants(query);
   }
 
+  @Post('tenants')
+  createTenant(@Body() dto: CreateTenantDto) {
+    return this.admin.createTenant(dto);
+  }
+
   @Get('tenants/:id')
   getTenant(@Param('id') id: string) {
     return this.admin.getTenant(id);
@@ -42,6 +49,14 @@ export class PlatformAdminController {
   @Patch('tenants/:id')
   updateTenant(@Param('id') id: string, @Body() dto: UpdateTenantDto) {
     return this.admin.updateTenant(id, dto);
+  }
+
+  @Patch('tenants/:id/billing')
+  updateTenantBilling(
+    @Param('id') id: string,
+    @Body() dto: UpdateTenantBillingDto,
+  ) {
+    return this.admin.updateTenantBilling(id, dto);
   }
 
   @Get('users')

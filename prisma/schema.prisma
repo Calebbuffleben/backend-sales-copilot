@@ -117,8 +117,8 @@ model Invitation {
   // sha256(tokenPlaintext) — plaintext is returned to the admin ONCE.
   tokenHash   String         @unique
   status      InviteStatus   @default(PENDING)
-  invitedById String
-  invitedBy   User           @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  invitedById String?
+  invitedBy   User?          @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
   expiresAt   DateTime
   acceptedAt  DateTime?
   revokedAt   DateTime?

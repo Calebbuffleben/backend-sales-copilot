@@ -38,7 +38,7 @@ export interface InvitationSummary {
   status: InviteStatus;
   expiresAt: Date;
   createdAt: Date;
-  invitedById: string;
+  invitedById: string | null;
 }
 
 export interface CreatedInvitation extends InvitationSummary {
@@ -441,10 +441,16 @@ export class InvitationsService {
         membershipId = existingMembership.id;
         role = existingMembership.role;
       } else {
-        // Find the inviter's membership for bookkeeping.
-        const inviterMembership = await this.prisma.membership.findFirst({
-          where: { userId: invite.invitedById, tenantId: invite.tenantId },
-        });
+        // Find the inviter's membership for bookkeeping (platform bootstrap
+        // invites may have no inviter user).
+        const inviterMembership = invite.invitedById
+          ? await this.prisma.membership.findFirst({
+              where: {
+                userId: invite.invitedById,
+                tenantId: invite.tenantId,
+              },
+            })
+          : null;
         const created = await this.prisma.membership.create({
           data: {
             userId,
