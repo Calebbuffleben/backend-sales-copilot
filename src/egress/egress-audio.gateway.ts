@@ -18,6 +18,7 @@ import {
   parseParticipantRole,
   type ParticipantRole,
 } from './egress-audio.lib';
+import { SessionsService } from '../sessions/sessions.service';
 
 interface EgressConnection {
   ws: WebSocket;
@@ -48,6 +49,7 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly pipelineService: PipelineService,
     private readonly jwt: AuthJwtService,
+    private readonly sessions: SessionsService,
   ) {}
 
   setHttpServer(server: Server) {
@@ -175,6 +177,20 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     };
 
     this.connections.set(ws, connection);
+    void this.sessions.markConnectionOpen({
+      tenantId: ctx.tenantId,
+      meetingId,
+      userId: ctx.userId,
+      participantId: participant,
+      participantRole,
+      track,
+      sampleRate,
+      channels,
+    }).catch((err) =>
+      this.logger.warn(
+        `Failed to persist session open | tenant=${ctx.tenantId} meetingId=${meetingId}: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
 
     this.logger.log(
       `WS /egress-audio connected | tenant=${ctx.tenantId} user=${ctx.userId} meetingId=${meetingId} | participant=${participant} | participantRole=${participantRole} | track=${track} | ${sampleRate}Hz/${channels}ch`,
@@ -204,6 +220,19 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `WS /egress-audio closed | tenant=${conn.ctx.tenantId} meetingId=${conn.meetingId} | chunks=${conn.chunksReceived} | bytes=${conn.bytesReceived} | durationMs=${duration} | code=${code}`,
         );
+        void this.sessions.markConnectionClosed({
+          tenantId: conn.ctx.tenantId,
+          meetingId: conn.meetingId,
+          userId: conn.ctx.userId,
+          participantId: conn.participant,
+          durationMs: duration,
+          chunksReceived: conn.chunksReceived,
+          bytesReceived: conn.bytesReceived,
+        }).catch((err) =>
+          this.logger.warn(
+            `Failed to persist session close | tenant=${conn.ctx.tenantId} meetingId=${conn.meetingId}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
         this.connections.delete(ws);
       }
     });
@@ -224,6 +253,19 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     const { ctx, meetingId, participant } = connection;
     if (connection.chunksReceived === 1) {
       const bytesPerSec = connection.sampleRate * connection.channels * 2;
+      void this.sessions.recordEvent({
+        tenantId: ctx.tenantId,
+        meetingId,
+        userId: ctx.userId,
+        participantId: participant,
+        stage: 'transcription.received',
+        message: 'Transcription received',
+        metadata: {
+          chunkBytes: chunkSize,
+          sampleRate: connection.sampleRate,
+          channels: connection.channels,
+        },
+      }).catch(() => undefined);
       this.logger.log(
         `First audio chunk | tenant=${ctx.tenantId} meetingId=${meetingId} | participant=${participant} | bytes=${chunkSize} | sampleRate=${connection.sampleRate} | channels=${connection.channels} | s16leBytesPerSec=${bytesPerSec}`,
       );
@@ -233,6 +275,13 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       const t = now.getTime();
       if (t - connection.lastIngressLogAt >= periodMs) {
         connection.lastIngressLogAt = t;
+        void this.sessions.markChunk({
+          tenantId: ctx.tenantId,
+          meetingId,
+          userId: ctx.userId,
+          participantId: participant,
+          chunkBytes: chunkSize,
+        }).catch(() => undefined);
         this.logger.log(
           `Audio ingress | tenant=${ctx.tenantId} meetingId=${meetingId} | chunks=${connection.chunksReceived} | bytes=${connection.bytesReceived} | lastChunk=${chunkSize}b`,
         );

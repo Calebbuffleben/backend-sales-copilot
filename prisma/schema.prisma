@@ -117,8 +117,8 @@ model Invitation {
   // sha256(tokenPlaintext) — plaintext is returned to the admin ONCE.
   tokenHash   String         @unique
   status      InviteStatus   @default(PENDING)
-  invitedById String
-  invitedBy   User           @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  invitedById String?
+  invitedBy   User?          @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
   expiresAt   DateTime
   acceptedAt  DateTime?
   revokedAt   DateTime?
@@ -209,19 +209,65 @@ enum SessionStatus {
 }
 
 model Session {
-  id        String        @id @default(uuid())
-  tenantId  String
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  meetingId String
-  roomSid   String?       @unique
-  roomName  String
-  status    SessionStatus @default(ACTIVE)
-  startedAt DateTime      @default(now())
-  endedAt   DateTime?
+  id                String        @id @default(uuid())
+  tenantId          String
+  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId         String
+  roomSid           String?       @unique
+  roomName          String
+  status            SessionStatus @default(ACTIVE)
+  startedAt         DateTime      @default(now())
+  endedAt           DateTime?
+  lastSeenAt        DateTime      @default(now())
+  activeConnections Int           @default(0)
+  audioSeconds      Int           @default(0)
+  metadata          Json?
 
   @@unique([tenantId, meetingId])
   @@index([roomName])
   @@index([tenantId])
+  @@index([tenantId, status, lastSeenAt])
+}
+
+model OperationalEvent {
+  id            String   @id @default(uuid())
+  timestamp     DateTime @default(now())
+  service       String
+  stage         String
+  message       String
+  tenantId      String?
+  meetingId     String?
+  userId        String?
+  participantId String?
+  traceId       String?
+  severity      String   @default("info")
+  durationMs    Int?
+  metadata      Json?
+
+  @@index([tenantId, timestamp])
+  @@index([meetingId, timestamp])
+  @@index([userId, timestamp])
+  @@index([traceId])
+  @@index([stage, timestamp])
+}
+
+model UsageDailyAggregate {
+  id                         String   @id @default(uuid())
+  date                       DateTime
+  tenantId                   String?
+  meetingsCount              Int      @default(0)
+  audioSeconds               Int      @default(0)
+  transcriptionWindows       Int      @default(0)
+  feedbacksCount             Int      @default(0)
+  geminiRequests             Int      @default(0)
+  geminiEstimatedCostUsd     Decimal  @default(0) @db.Decimal(12, 6)
+  assemblyAiSeconds          Int      @default(0)
+  assemblyAiEstimatedCostUsd Decimal  @default(0) @db.Decimal(12, 6)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  @@unique([date, tenantId])
+  @@index([tenantId, date])
 }
 
 enum FeedbackSeverity {
