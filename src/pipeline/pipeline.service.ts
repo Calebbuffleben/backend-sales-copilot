@@ -1,6 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { GrpcAudioClient } from './grpc-audio.client';
 import { convertPcmToWav } from './audio-utils';
+import {
+  computeCoalesceThresholdBytes,
+  loadDefaultCoalesceMs,
+  resolveCoalesceMs,
+  shouldFlushCoalescedBatch,
+} from './pipeline-coalesce.lib';
 
 export type AudioChunkMeta = {
   tenantId: string;
@@ -11,66 +17,76 @@ export type AudioChunkMeta = {
   track: string;
   sampleRate: number; // Hz
   channels: number; // 1 or 2
-  groupSeconds?: number; // optional per-call override
+  /** Passthrough batch size in ms (overrides service default). */
+  coalesceMs?: number;
+  /** Legacy per-call override in seconds (converted to ms). */
+  groupSeconds?: number;
 };
 
 type BufferState = {
   buffers: Buffer[];
   bytesAccumulated: number;
   thresholdBytes: number;
-  lastFlushAt: number;
-  firstChunkAt: number;
+  coalesceMs: number;
+  batchStartedAt: number;
   seq: number;
 };
 
 @Injectable()
 export class PipelineService {
   private keyToState = new Map<string, BufferState>();
-  private readonly defaultGroupSeconds: number;
+  private readonly defaultCoalesceMs: number;
   private readonly logger = new Logger(PipelineService.name);
 
   constructor(private readonly grpcClient: GrpcAudioClient) {
-    const seconds = Number(process.env.AUDIO_PIPELINE_GROUP_SECONDS || '2');
-    this.defaultGroupSeconds =
-      Number.isFinite(seconds) && seconds > 0 ? seconds : 2;
+    this.defaultCoalesceMs = loadDefaultCoalesceMs();
+    this.logger.log(
+      `Audio passthrough coalesce window: ${this.defaultCoalesceMs}ms (env AUDIO_PIPELINE_COALESCE_MS or legacy AUDIO_PIPELINE_GROUP_SECONDS)`,
+    );
   }
 
   enqueueChunk(data: Buffer, meta: AudioChunkMeta) {
     const key = this.buildKey(meta);
-    const groupSeconds =
-      meta.groupSeconds && meta.groupSeconds > 0
-        ? meta.groupSeconds
-        : this.defaultGroupSeconds;
-    const thresholdBytes = this.computeThresholdBytes(meta, groupSeconds);
+    const coalesceMs = resolveCoalesceMs(this.defaultCoalesceMs, meta);
+    const thresholdBytes = computeCoalesceThresholdBytes(
+      meta.sampleRate,
+      meta.channels,
+      coalesceMs,
+    );
+
     let state = this.keyToState.get(key);
     if (!state) {
       state = {
         buffers: [],
         bytesAccumulated: 0,
         thresholdBytes,
-        lastFlushAt: Date.now(),
-        firstChunkAt: Date.now(),
+        coalesceMs,
+        batchStartedAt: Date.now(),
         seq: 0,
       };
       this.keyToState.set(key, state);
+    } else if (
+      state.coalesceMs !== coalesceMs ||
+      state.thresholdBytes !== thresholdBytes
+    ) {
+      state.coalesceMs = coalesceMs;
+      state.thresholdBytes = thresholdBytes;
+    }
+
+    if (state.bytesAccumulated === 0) {
+      state.batchStartedAt = Date.now();
     }
 
     state.buffers.push(data);
     state.bytesAccumulated += data.length;
-    if (state.buffers.length === 1) {
-      state.firstChunkAt = Date.now();
-    }
 
-    const timeSinceLastFlush = Date.now() - state.lastFlushAt;
-    const timeTriggerMs = Math.max(
-      500,
-      (meta.groupSeconds && meta.groupSeconds > 0
-        ? meta.groupSeconds
-        : this.defaultGroupSeconds) * 1000,
-    );
     if (
-      state.bytesAccumulated >= state.thresholdBytes ||
-      timeSinceLastFlush >= timeTriggerMs
+      shouldFlushCoalescedBatch(
+        state.bytesAccumulated,
+        state.thresholdBytes,
+        state.batchStartedAt,
+        state.coalesceMs,
+      )
     ) {
       this.flush(meta, key, state);
     }
@@ -80,14 +96,6 @@ export class PipelineService {
     return `${meta.tenantId}:${meta.meetingId}:${meta.participant}:${meta.track}`;
   }
 
-  private computeThresholdBytes(meta: AudioChunkMeta, seconds: number): number {
-    const bytesPerSamplePerChannel = 2; // s16le
-    return Math.floor(
-      meta.sampleRate * bytesPerSamplePerChannel * meta.channels * seconds,
-    );
-  }
-
-  // Transforma o buffer acumulado em um buffer de payload
   private flush(meta: AudioChunkMeta, key: string, state: BufferState): void {
     if (state.bytesAccumulated === 0) {
       return;
@@ -95,10 +103,10 @@ export class PipelineService {
     const payload = Buffer.concat(state.buffers, state.bytesAccumulated);
     state.buffers = [];
     state.bytesAccumulated = 0;
-    state.lastFlushAt = Date.now();
+    state.batchStartedAt = Date.now();
     state.seq += 1;
 
-    const captureTs = state.lastFlushAt; // coarse; will be refined to end-of-window timestamp
+    const captureTs = Date.now();
     const seq = state.seq;
 
     this.dispatchToGrpc(meta, payload, captureTs, seq).catch((err) => {
@@ -118,7 +126,6 @@ export class PipelineService {
     const key = this.buildKey(meta);
 
     try {
-      // Converter PCM para WAV
       const t2_conversion_start = Date.now();
       const wavBuffer = convertPcmToWav(pcm, meta.sampleRate, meta.channels);
       const t2_conversion_end = Date.now();
@@ -139,12 +146,10 @@ export class PipelineService {
 
       const t3_ready_to_send = Date.now();
 
-      // Enviar via gRPC client streaming
       await this.grpcClient.sendAudioChunk(key, audioChunk);
 
       const t4_sent = Date.now();
 
-      // Latência detalhada (habilitar LOG_LEVEL=debug para ver no deploy)
       this.logger.debug(`[LATENCY] Audio pipeline timing`, {
         meetingId: meta.meetingId,
         participantId: meta.participant,
