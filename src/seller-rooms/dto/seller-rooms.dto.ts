@@ -1,4 +1,5 @@
 import {
+  IsEmail,
   IsOptional,
   IsString,
   IsUUID,
@@ -24,8 +25,8 @@ export class CreateSellerRoomDto {
 }
 
 export class InviteSellerRoomMemberDto {
-  @IsUUID()
-  inviteeId!: string;
+  @IsEmail()
+  email!: string;
 }
 
 export class AcceptSellerRoomInvitationDto {

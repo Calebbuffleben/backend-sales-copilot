@@ -87,7 +87,7 @@ export class SellerRoomsService {
     tenantId: string,
     invitedById: string,
     roomId: string,
-    inviteeId: string,
+    inviteeEmail: string,
   ) {
     const room = await this.findAccessibleRoom(tenantId, invitedById, roomId);
     if (
@@ -112,13 +112,29 @@ export class SellerRoomsService {
       );
     }
 
+    const normalizedEmail = inviteeEmail.trim().toLowerCase();
+    if (!normalizedEmail.includes('@')) {
+      throw new BadRequestException('Invalid email');
+    }
+
+    const inviteeUser = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true, email: true },
+    });
+    if (!inviteeUser) {
+      throw new BadRequestException(
+        'No user found with this email. They must already be a member of this tenant.',
+      );
+    }
+
     const membership = await this.prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: inviteeId, tenantId } },
+      where: { userId_tenantId: { userId: inviteeUser.id, tenantId } },
     });
     if (!membership) {
       throw new BadRequestException('Invitee is not a member of this tenant');
     }
 
+    const inviteeId = inviteeUser.id;
     const existingMember = room.members.find((m) => m.userId === inviteeId);
     if (existingMember?.status === SellerRoomMemberStatus.JOINED) {
       throw new BadRequestException('User is already a joined member');

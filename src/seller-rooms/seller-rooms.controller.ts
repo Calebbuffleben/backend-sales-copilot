@@ -66,7 +66,7 @@ export class SellerRoomsController {
       user.tenantId,
       user.userId,
       id,
-      dto.inviteeId,
+      dto.email,
     );
   }
 
