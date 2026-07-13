@@ -183,11 +183,19 @@ export class FingerprintCacheService implements OnModuleDestroy {
     );
   }
 
-  async purgeRoom(tenantId: string, roomId: string): Promise<void> {
+  async purgeRoom(
+    tenantId: string,
+    roomId: string,
+    memberIds?: string[],
+  ): Promise<void> {
     if (!(await this.ensureConnected()) || !this.client) return;
     const presence = await this.getPresence(tenantId, roomId);
+    const userIds = new Set([
+      ...Object.keys(presence),
+      ...(memberIds ?? []),
+    ]);
     const keys = [this.presenceKey(tenantId, roomId)];
-    for (const userId of Object.keys(presence)) {
+    for (const userId of userIds) {
       keys.push(this.fpKey(tenantId, roomId, userId));
       keys.push(this.lastSeqKey(tenantId, roomId, userId));
     }

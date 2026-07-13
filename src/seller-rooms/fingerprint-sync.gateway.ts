@@ -320,14 +320,7 @@ export class FingerprintSyncGateway
     if (!sellerRoomId) return;
     try {
       await this.rooms.end(tenantId, ctx.userId, sellerRoomId);
-      await this.cache.purgeRoom(tenantId, sellerRoomId);
-      this.server
-        .to(socketRoom(tenantId, sellerRoomId))
-        .emit('seller-room-ended', {
-          type: 'seller-room-ended',
-          sellerRoomId,
-          reason: 'creator_ended',
-        });
+      this.emitRoomEnded(tenantId, sellerRoomId, 'creator_ended');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'end failed';
       client.emit('error', { message });
@@ -336,6 +329,21 @@ export class FingerprintSyncGateway
 
   getMetrics() {
     return { ...this.metrics };
+  }
+
+  /** Broadcast room end from lifecycle / REST (not only Socket.IO handler). */
+  emitRoomEnded(
+    tenantId: string,
+    sellerRoomId: string,
+    reason: string,
+  ): void {
+    this.server
+      ?.to(socketRoom(tenantId, sellerRoomId))
+      .emit('seller-room-ended', {
+        type: 'seller-room-ended',
+        sellerRoomId,
+        reason,
+      });
   }
 
   private consumeRateToken(userId: string): boolean {

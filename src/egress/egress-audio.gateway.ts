@@ -19,6 +19,11 @@ import {
   type ParticipantRole,
 } from './egress-audio.lib';
 import { SessionsService } from '../sessions/sessions.service';
+import {
+  AcousticLabelBuffer,
+  parseAcousticLabelControl,
+  stripPcmV2,
+} from './acoustic-label-buffer';
 
 interface EgressConnection {
   ws: WebSocket;
@@ -37,6 +42,8 @@ interface EgressConnection {
   acousticClass: string;
   matchedSellerId: string;
   correlationConfidence: number;
+  labelBuffer: AcousticLabelBuffer;
+  batchStartedAtMs: number;
   bytesReceived: number;
   chunksReceived: number;
   connectedAt: Date;
@@ -181,6 +188,8 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       acousticClass: 'unknown',
       matchedSellerId: '',
       correlationConfidence: 0,
+      labelBuffer: new AcousticLabelBuffer(),
+      batchStartedAtMs: Date.now(),
       bytesReceived: 0,
       chunksReceived: 0,
       connectedAt: new Date(),
@@ -261,17 +270,12 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   private handleControlMessage(connection: EgressConnection, raw: string) {
-    try {
-      const obj = JSON.parse(raw) as Record<string, unknown>;
-      if (obj.type !== 'acoustic_label') return;
-      connection.acousticClass = String(obj.acousticClass ?? 'unknown');
-      connection.matchedSellerId = obj.matchedSellerId
-        ? String(obj.matchedSellerId)
-        : '';
-      connection.correlationConfidence = Number(obj.confidence ?? 0);
-    } catch {
-      // ignore malformed control
-    }
+    const label = parseAcousticLabelControl(raw);
+    if (!label) return;
+    connection.labelBuffer.upsert(label);
+    connection.acousticClass = label.acousticClass;
+    connection.matchedSellerId = label.matchedSellerId ?? '';
+    connection.correlationConfidence = label.confidence;
   }
 
   private handleAudioData(
@@ -279,11 +283,14 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     data: Buffer | ArrayBuffer,
   ) {
     let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    // Strip PCM v2 envelope if present (magic MP2\x06).
-    if (buffer.length >= 24 && buffer.readUInt32BE(0) === 0x4d503206) {
-      const pcmLength = buffer.readUInt32BE(16);
-      if (buffer.length >= 24 + pcmLength) {
-        buffer = buffer.subarray(24, 24 + pcmLength);
+    const pcmV2 = stripPcmV2(buffer);
+    if (pcmV2) {
+      buffer = pcmV2.pcm;
+      const resolved = connection.labelBuffer.resolve(pcmV2.labelId);
+      if (resolved) {
+        connection.acousticClass = resolved.acousticClass;
+        connection.matchedSellerId = resolved.matchedSellerId ?? '';
+        connection.correlationConfidence = resolved.confidence;
       }
     }
     const chunkSize = buffer.length;
@@ -292,6 +299,9 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     connection.bytesReceived += chunkSize;
     connection.chunksReceived += 1;
     connection.lastChunkAt = now;
+    if (connection.chunksReceived === 1) {
+      connection.batchStartedAtMs = now.getTime();
+    }
 
     const { ctx, meetingId, participant } = connection;
     if (connection.chunksReceived === 1) {
@@ -329,6 +339,14 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
           `Audio ingress | tenant=${ctx.tenantId} meetingId=${meetingId} | chunks=${connection.chunksReceived} | bytes=${connection.bytesReceived} | lastChunk=${chunkSize}b`,
         );
       }
+    }
+
+    const aggregated = connection.labelBuffer.aggregate(
+      connection.batchStartedAtMs,
+      now.getTime(),
+    );
+    if (aggregated !== 'unknown') {
+      connection.acousticClass = aggregated;
     }
 
     const meta: AudioChunkMeta = {

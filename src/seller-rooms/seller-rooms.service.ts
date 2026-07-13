@@ -12,6 +12,8 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateSellerRoomDto } from './dto/seller-rooms.dto';
+import { FingerprintCacheService } from './fingerprint-cache';
+import { randomBytes } from 'crypto';
 
 const MAX_MEMBERS_PER_ROOM = 10;
 const MAX_ACTIVE_ROOMS_PER_TENANT = 5;
@@ -19,7 +21,10 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class SellerRoomsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: FingerprintCacheService,
+  ) {}
 
   async create(tenantId: string, userId: string, dto: CreateSellerRoomDto) {
     const activeCount = await this.prisma.sellerRoom.count({
@@ -42,6 +47,11 @@ export class SellerRoomsService {
         meetUrl: dto.meetUrl?.trim() || null,
         createdById: userId,
         status: SellerRoomStatus.OPEN,
+        metadata: {
+          fingerprintVersion: 'logmel_mfcc_v1',
+          // Ephemeral projection seed — never log; discarded on ENDED via Redis purge.
+          projectionSeed: randomBytes(16).toString('hex'),
+        },
         members: {
           create: {
             userId,
@@ -265,7 +275,7 @@ export class SellerRoomsService {
     if (room.createdById !== userId) {
       throw new ForbiddenException('Only the creator can end the room');
     }
-    return this.prisma.sellerRoom.update({
+    const updated = await this.prisma.sellerRoom.update({
       where: { id: roomId },
       data: {
         status: SellerRoomStatus.ENDED,
@@ -273,6 +283,18 @@ export class SellerRoomsService {
       },
       include: this.roomInclude(),
     });
+    // Clear ephemeral projection seed from metadata without logging it.
+    if (room.metadata && typeof room.metadata === 'object') {
+      const meta = { ...(room.metadata as Record<string, unknown>) };
+      delete meta.projectionSeed;
+      await this.prisma.sellerRoom.update({
+        where: { id: roomId },
+        data: { metadata: meta as object },
+      });
+    }
+    const memberIds = room.members.map((m) => m.userId);
+    await this.cache.purgeRoom(tenantId, roomId, memberIds);
+    return updated;
   }
 
   async assertJoinedMember(

@@ -5,6 +5,7 @@ import { FingerprintCacheService } from './fingerprint-cache';
 import { FingerprintSyncGateway } from './fingerprint-sync.gateway';
 import { SellerAudioFingerprintService } from './seller-audio-fingerprint.service';
 import { SellerRoomsController } from './seller-rooms.controller';
+import { SellerRoomsLifecycleService } from './seller-rooms-lifecycle.service';
 import { SellerRoomsService } from './seller-rooms.service';
 
 @Module({
@@ -15,7 +16,13 @@ import { SellerRoomsService } from './seller-rooms.service';
     FingerprintCacheService,
     SellerAudioFingerprintService,
     FingerprintSyncGateway,
+    SellerRoomsLifecycleService,
   ],
-  exports: [SellerRoomsService, FingerprintCacheService, FingerprintSyncGateway],
+  exports: [
+    SellerRoomsService,
+    FingerprintCacheService,
+    FingerprintSyncGateway,
+    SellerRoomsLifecycleService,
+  ],
 })
 export class SellerRoomsModule {}

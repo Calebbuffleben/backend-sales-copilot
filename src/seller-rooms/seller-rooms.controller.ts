@@ -17,11 +17,15 @@ import {
   CreateSellerRoomDto,
   InviteSellerRoomMemberDto,
 } from './dto/seller-rooms.dto';
+import { FingerprintSyncGateway } from './fingerprint-sync.gateway';
 import { SellerRoomsService } from './seller-rooms.service';
 
 @Controller('seller-rooms')
 export class SellerRoomsController {
-  constructor(private readonly sellerRooms: SellerRoomsService) {}
+  constructor(
+    private readonly sellerRooms: SellerRoomsService,
+    private readonly fingerprintSync: FingerprintSyncGateway,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -107,6 +111,8 @@ export class SellerRoomsController {
     @Param('id') id: string,
   ) {
     if (!user) throw new UnauthorizedException();
-    return this.sellerRooms.end(user.tenantId, user.userId, id);
+    const room = await this.sellerRooms.end(user.tenantId, user.userId, id);
+    this.fingerprintSync.emitRoomEnded(user.tenantId, id, 'creator_ended');
+    return room;
   }
 }
