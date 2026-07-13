@@ -32,6 +32,11 @@ interface EgressConnection {
   track: string;
   sampleRate: number;
   channels: number;
+  sellerRoomId: string;
+  pcmVersion: number;
+  acousticClass: string;
+  matchedSellerId: string;
+  correlationConfidence: number;
   bytesReceived: number;
   chunksReceived: number;
   connectedAt: Date;
@@ -133,6 +138,8 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     const claimedTenantId = url.searchParams.get('tenantId') || '';
     const rawParticipantRole = url.searchParams.get('participantRole');
     const participantRole = parseParticipantRole(rawParticipantRole);
+    const sellerRoomId = (url.searchParams.get('sellerRoomId') || '').trim();
+    const pcmVersion = parseInt(url.searchParams.get('pcmVersion') || '1', 10);
     if (
       rawParticipantRole &&
       rawParticipantRole.trim().toLowerCase() !== participantRole
@@ -169,6 +176,11 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       track,
       sampleRate,
       channels,
+      sellerRoomId,
+      pcmVersion: Number.isFinite(pcmVersion) ? pcmVersion : 1,
+      acousticClass: 'unknown',
+      matchedSellerId: '',
+      correlationConfidence: 0,
       bytesReceived: 0,
       chunksReceived: 0,
       connectedAt: new Date(),
@@ -200,9 +212,19 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     // headers in these handlers, and NEVER trust AsyncLocalStorage here. The
     // `ws` library keeps these callbacks alive for the full lifetime of the
     // connection and they are intercalated across concurrent tenants.
-    ws.on('message', (data: WebSocket.Data) => {
+    ws.on('message', (data: WebSocket.Data, isBinary: boolean) => {
+      if (!isBinary && typeof data === 'string') {
+        this.handleControlMessage(connection, data);
+        return;
+      }
       if (Buffer.isBuffer(data) || data instanceof ArrayBuffer) {
-        this.handleAudioData(connection, data);
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        // Text control may arrive as Buffer of UTF-8.
+        if (!isBinary && buf.length > 0 && buf[0] === 0x7b /* '{' */) {
+          this.handleControlMessage(connection, buf.toString('utf8'));
+          return;
+        }
+        this.handleAudioData(connection, buf);
       }
     });
 
@@ -238,11 +260,32 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  private handleControlMessage(connection: EgressConnection, raw: string) {
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      if (obj.type !== 'acoustic_label') return;
+      connection.acousticClass = String(obj.acousticClass ?? 'unknown');
+      connection.matchedSellerId = obj.matchedSellerId
+        ? String(obj.matchedSellerId)
+        : '';
+      connection.correlationConfidence = Number(obj.confidence ?? 0);
+    } catch {
+      // ignore malformed control
+    }
+  }
+
   private handleAudioData(
     connection: EgressConnection,
     data: Buffer | ArrayBuffer,
   ) {
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    // Strip PCM v2 envelope if present (magic MP2\x06).
+    if (buffer.length >= 24 && buffer.readUInt32BE(0) === 0x4d503206) {
+      const pcmLength = buffer.readUInt32BE(16);
+      if (buffer.length >= 24 + pcmLength) {
+        buffer = buffer.subarray(24, 24 + pcmLength);
+      }
+    }
     const chunkSize = buffer.length;
     const now = new Date();
 
@@ -297,6 +340,10 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       track: connection.track,
       sampleRate: connection.sampleRate,
       channels: connection.channels,
+      sellerRoomId: connection.sellerRoomId || undefined,
+      acousticClass: connection.acousticClass,
+      matchedSellerId: connection.matchedSellerId || undefined,
+      correlationConfidence: connection.correlationConfidence,
     };
 
     try {

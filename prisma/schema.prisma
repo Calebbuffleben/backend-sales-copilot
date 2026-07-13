@@ -74,6 +74,7 @@ model Tenant {
   refreshTokens     RefreshToken[]
   auditLogs         AuditLog[]
   playbookTemplates PlaybookTemplate[]
+  sellerRooms       SellerRoom[]
 }
 
 model User {
@@ -86,9 +87,13 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  memberships   Membership[]
-  refreshTokens RefreshToken[]
-  sentInvites   Invitation[]   @relation("InvitationInvitedBy")
+  memberships              Membership[]
+  refreshTokens            RefreshToken[]
+  sentInvites              Invitation[]            @relation("InvitationInvitedBy")
+  sellerRoomsCreated       SellerRoom[]            @relation("SellerRoomCreatedBy")
+  sellerRoomMemberships    SellerRoomMember[]
+  sellerRoomInvitesSent    SellerRoomInvitation[]  @relation("SellerRoomInvitationInvitedBy")
+  sellerRoomInvitesReceived SellerRoomInvitation[] @relation("SellerRoomInvitationInvitee")
 }
 
 model Membership {
@@ -332,4 +337,88 @@ model FeedbackEvent {
 
   @@index([tenantId, meetingId, ts])
   @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Seller Rooms — acoustic sync between co-sellers (no fingerprint persistence)
+// ---------------------------------------------------------------------------
+
+enum SellerRoomStatus {
+  OPEN
+  ACTIVE
+  ENDED
+  ARCHIVED
+}
+
+enum SellerRoomMemberStatus {
+  INVITED
+  JOINED
+  LEFT
+}
+
+enum SellerRoomInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+model SellerRoom {
+  id          String           @id @default(uuid())
+  tenantId    String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId   String
+  name        String
+  status      SellerRoomStatus @default(OPEN)
+  createdById String
+  createdBy   User             @relation("SellerRoomCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  meetUrl     String?
+  metadata    Json?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  members      SellerRoomMember[]
+  invitations  SellerRoomInvitation[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, meetingId])
+  @@index([createdById])
+}
+
+model SellerRoomMember {
+  id           String                 @id @default(uuid())
+  sellerRoomId String
+  sellerRoom   SellerRoom             @relation(fields: [sellerRoomId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       SellerRoomMemberStatus @default(INVITED)
+  joinedAt     DateTime?
+  leftAt       DateTime?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  @@unique([sellerRoomId, userId])
+  @@index([userId])
+  @@index([sellerRoomId, status])
+}
+
+model SellerRoomInvitation {
+  id           String                      @id @default(uuid())
+  sellerRoomId String
+  sellerRoom   SellerRoom                  @relation(fields: [sellerRoomId], references: [id], onDelete: Cascade)
+  inviteeId    String
+  invitee      User                        @relation("SellerRoomInvitationInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+  invitedById  String
+  invitedBy    User                        @relation("SellerRoomInvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  status       SellerRoomInvitationStatus  @default(PENDING)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  @@index([sellerRoomId, status])
+  @@index([inviteeId, status])
 }

@@ -16,6 +16,7 @@ import { InvitationsModule } from './invitations/invitations.module';
 import { PlaybooksModule } from './playbooks/playbooks.module';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module';
 import { OpsModule } from './ops/ops.module';
+import { SellerRoomsModule } from './seller-rooms/seller-rooms.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { OpsModule } from './ops/ops.module';
     MembersModule,
     InvitationsModule,
     PlaybooksModule,
+    SellerRoomsModule,
     PlatformAdminModule,
     OpsModule,
     FeedbackModule,

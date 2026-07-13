@@ -21,6 +21,10 @@ export type AudioChunkMeta = {
   coalesceMs?: number;
   /** Legacy per-call override in seconds (converted to ms). */
   groupSeconds?: number;
+  sellerRoomId?: string;
+  acousticClass?: string;
+  matchedSellerId?: string;
+  correlationConfidence?: number;
 };
 
 type BufferState = {
@@ -142,6 +146,10 @@ export class PipelineService {
         tenant_id: meta.tenantId,
         user_id: meta.userId ?? '',
         participant_role: meta.participantRole ?? 'unknown',
+        acoustic_class: meta.acousticClass ?? '',
+        seller_room_id: meta.sellerRoomId ?? '',
+        matched_seller_id: meta.matchedSellerId ?? '',
+        correlation_confidence: meta.correlationConfidence ?? 0,
       };
 
       const t3_ready_to_send = Date.now();
