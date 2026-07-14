@@ -3,6 +3,8 @@ import { SkipThrottle } from '@nestjs/throttler';
 
 import { Public } from '../auth/decorators/public.decorator';
 import { PlatformAdminGuard } from '../platform-admin/platform-admin.guard';
+import { FingerprintSyncGateway } from '../seller-rooms/fingerprint-sync.gateway';
+import { SellerRoomsLifecycleService } from '../seller-rooms/seller-rooms-lifecycle.service';
 import { OpsService } from './ops.service';
 
 @Controller('ops')
@@ -10,7 +12,11 @@ import { OpsService } from './ops.service';
 @UseGuards(PlatformAdminGuard)
 @SkipThrottle()
 export class OpsController {
-  constructor(private readonly ops: OpsService) {}
+  constructor(
+    private readonly ops: OpsService,
+    private readonly fingerprintSync: FingerprintSyncGateway,
+    private readonly sellerRoomsLifecycle: SellerRoomsLifecycleService,
+  ) {}
 
   @Get('meetings/live')
   liveMeetings() {
@@ -67,5 +73,21 @@ export class OpsController {
   @Get('metrics/saas-summary')
   saasSummary() {
     return this.ops.saasSummary();
+  }
+
+  @Get('seller-rooms/metrics')
+  sellerRoomMetrics() {
+    return {
+      fingerprintSync: this.fingerprintSync.getMetrics(),
+      idleTimeoutMs: Number(process.env.SELLER_ROOM_IDLE_TIMEOUT_MS || 60_000),
+      archiveAfterMs: Number(
+        process.env.SELLER_ROOM_ARCHIVE_AFTER_MS || 24 * 60 * 60 * 1000,
+      ),
+    };
+  }
+
+  @Get('seller-rooms/lifecycle-tick')
+  async sellerRoomLifecycleTick() {
+    return this.sellerRoomsLifecycle.tick();
   }
 }

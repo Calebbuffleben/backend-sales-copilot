@@ -15,6 +15,10 @@ interface AudioChunk {
   tenant_id: string;
   user_id: string;
   participant_role?: string;
+  acoustic_class?: string;
+  seller_room_id?: string;
+  matched_seller_id?: string;
+  correlation_confidence?: number;
 }
 
 interface StreamAudioResponse {

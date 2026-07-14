@@ -19,6 +19,11 @@ import {
   type ParticipantRole,
 } from './egress-audio.lib';
 import { SessionsService } from '../sessions/sessions.service';
+import {
+  AcousticLabelBuffer,
+  parseAcousticLabelControl,
+  stripPcmV2,
+} from './acoustic-label-buffer';
 
 interface EgressConnection {
   ws: WebSocket;
@@ -32,6 +37,13 @@ interface EgressConnection {
   track: string;
   sampleRate: number;
   channels: number;
+  sellerRoomId: string;
+  pcmVersion: number;
+  acousticClass: string;
+  matchedSellerId: string;
+  correlationConfidence: number;
+  labelBuffer: AcousticLabelBuffer;
+  batchStartedAtMs: number;
   bytesReceived: number;
   chunksReceived: number;
   connectedAt: Date;
@@ -133,6 +145,8 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     const claimedTenantId = url.searchParams.get('tenantId') || '';
     const rawParticipantRole = url.searchParams.get('participantRole');
     const participantRole = parseParticipantRole(rawParticipantRole);
+    const sellerRoomId = (url.searchParams.get('sellerRoomId') || '').trim();
+    const pcmVersion = parseInt(url.searchParams.get('pcmVersion') || '1', 10);
     if (
       rawParticipantRole &&
       rawParticipantRole.trim().toLowerCase() !== participantRole
@@ -169,6 +183,13 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       track,
       sampleRate,
       channels,
+      sellerRoomId,
+      pcmVersion: Number.isFinite(pcmVersion) ? pcmVersion : 1,
+      acousticClass: 'unknown',
+      matchedSellerId: '',
+      correlationConfidence: 0,
+      labelBuffer: new AcousticLabelBuffer(),
+      batchStartedAtMs: Date.now(),
       bytesReceived: 0,
       chunksReceived: 0,
       connectedAt: new Date(),
@@ -200,9 +221,19 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     // headers in these handlers, and NEVER trust AsyncLocalStorage here. The
     // `ws` library keeps these callbacks alive for the full lifetime of the
     // connection and they are intercalated across concurrent tenants.
-    ws.on('message', (data: WebSocket.Data) => {
+    ws.on('message', (data: WebSocket.Data, isBinary: boolean) => {
+      if (!isBinary && typeof data === 'string') {
+        this.handleControlMessage(connection, data);
+        return;
+      }
       if (Buffer.isBuffer(data) || data instanceof ArrayBuffer) {
-        this.handleAudioData(connection, data);
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        // Text control may arrive as Buffer of UTF-8.
+        if (!isBinary && buf.length > 0 && buf[0] === 0x7b /* '{' */) {
+          this.handleControlMessage(connection, buf.toString('utf8'));
+          return;
+        }
+        this.handleAudioData(connection, buf);
       }
     });
 
@@ -238,17 +269,39 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  private handleControlMessage(connection: EgressConnection, raw: string) {
+    const label = parseAcousticLabelControl(raw);
+    if (!label) return;
+    connection.labelBuffer.upsert(label);
+    connection.acousticClass = label.acousticClass;
+    connection.matchedSellerId = label.matchedSellerId ?? '';
+    connection.correlationConfidence = label.confidence;
+  }
+
   private handleAudioData(
     connection: EgressConnection,
     data: Buffer | ArrayBuffer,
   ) {
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const pcmV2 = stripPcmV2(buffer);
+    if (pcmV2) {
+      buffer = pcmV2.pcm;
+      const resolved = connection.labelBuffer.resolve(pcmV2.labelId);
+      if (resolved) {
+        connection.acousticClass = resolved.acousticClass;
+        connection.matchedSellerId = resolved.matchedSellerId ?? '';
+        connection.correlationConfidence = resolved.confidence;
+      }
+    }
     const chunkSize = buffer.length;
     const now = new Date();
 
     connection.bytesReceived += chunkSize;
     connection.chunksReceived += 1;
     connection.lastChunkAt = now;
+    if (connection.chunksReceived === 1) {
+      connection.batchStartedAtMs = now.getTime();
+    }
 
     const { ctx, meetingId, participant } = connection;
     if (connection.chunksReceived === 1) {
@@ -288,6 +341,14 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    const aggregated = connection.labelBuffer.aggregate(
+      connection.batchStartedAtMs,
+      now.getTime(),
+    );
+    if (aggregated !== 'unknown') {
+      connection.acousticClass = aggregated;
+    }
+
     const meta: AudioChunkMeta = {
       tenantId: connection.ctx.tenantId,
       userId: connection.ctx.userId,
@@ -297,6 +358,10 @@ export class EgressAudioGateway implements OnModuleInit, OnModuleDestroy {
       track: connection.track,
       sampleRate: connection.sampleRate,
       channels: connection.channels,
+      sellerRoomId: connection.sellerRoomId || undefined,
+      acousticClass: connection.acousticClass,
+      matchedSellerId: connection.matchedSellerId || undefined,
+      correlationConfidence: connection.correlationConfidence,
     };
 
     try {
