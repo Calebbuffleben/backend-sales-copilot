@@ -65,7 +65,7 @@ export class SellerRoomsService {
   }
 
   async list(tenantId: string, userId: string) {
-    return this.prisma.sellerRoom.findMany({
+    const rooms = await this.prisma.sellerRoom.findMany({
       where: {
         tenantId,
         OR: [
@@ -76,6 +76,32 @@ export class SellerRoomsService {
       orderBy: { createdAt: 'desc' },
       include: this.roomInclude(),
     });
+
+    return Promise.all(
+      rooms.map(async (room) => {
+        const myMember = room.members.find((m) => m.userId === userId);
+        const presence =
+          room.status === SellerRoomStatus.OPEN ||
+          room.status === SellerRoomStatus.ACTIVE
+            ? await this.cache.getPresence(tenantId, room.id)
+            : {};
+        const onlineUserIds = Object.keys(presence);
+        const pendingInviteForMe = room.invitations.find(
+          (inv) =>
+            inv.inviteeId === userId &&
+            inv.status === SellerRoomInvitationStatus.PENDING,
+        );
+        return {
+          ...room,
+          myMemberStatus: myMember?.status ?? null,
+          isCreator: room.createdById === userId,
+          onlineUserIds,
+          onlineCount: onlineUserIds.length,
+          iAmOnline: Boolean(presence[userId]),
+          pendingInvitationId: pendingInviteForMe?.id ?? null,
+        };
+      }),
+    );
   }
 
   async get(tenantId: string, userId: string, roomId: string) {

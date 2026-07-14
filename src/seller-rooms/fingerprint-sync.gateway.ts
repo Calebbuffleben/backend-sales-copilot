@@ -111,6 +111,7 @@ export class FingerprintSyncGateway
     const roomId = client.data?.sellerRoomId;
     if (ctx && roomId) {
       await this.cache.removePresence(ctx.tenantId, roomId, ctx.userId);
+      await this.broadcastPresence(ctx.tenantId, roomId);
     }
   }
 
@@ -189,6 +190,7 @@ export class FingerprintSyncGateway
         fingerprintSnapshot,
         serverTimeMs: Date.now(),
       });
+      await this.broadcastPresence(tenantId, sellerRoomId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'join failed';
       client.emit('error', { message });
@@ -343,6 +345,21 @@ export class FingerprintSyncGateway
         type: 'seller-room-ended',
         sellerRoomId,
         reason,
+      });
+  }
+
+  private async broadcastPresence(
+    tenantId: string,
+    sellerRoomId: string,
+  ): Promise<void> {
+    const presence = await this.cache.getPresence(tenantId, sellerRoomId);
+    this.server
+      ?.to(socketRoom(tenantId, sellerRoomId))
+      .emit('presence-updated', {
+        type: 'presence-updated',
+        sellerRoomId,
+        onlineUserIds: Object.keys(presence),
+        onlineCount: Object.keys(presence).length,
       });
   }
 
