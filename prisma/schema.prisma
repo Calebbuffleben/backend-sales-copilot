@@ -193,16 +193,23 @@ model AuditLog {
 // ---------------------------------------------------------------------------
 
 /// Tenant-defined actionable playbook (steps stored as JSON; validated in app layer).
+/// PDF source is ingested at admin upload time only — Live catalog gets sourceTextExcerpt.
 model PlaybookTemplate {
-  id          String   @id @default(uuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  key         String
-  title       String
-  description String?
-  steps       Json
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key                String
+  title              String
+  description        String?
+  steps              Json
+  /// Original PDF filename for admin UI (no binary stored).
+  sourcePdfFileName  String?
+  /// Full extracted text (admin/DB only; never sent on Live catalog).
+  sourceText         String?
+  /// Short excerpt (~2k) for Live TF-IDF + system_instruction catalog.
+  sourceTextExcerpt  String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@unique([tenantId, key])
   @@index([tenantId])

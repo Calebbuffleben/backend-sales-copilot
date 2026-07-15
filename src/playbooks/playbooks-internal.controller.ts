@@ -39,13 +39,14 @@ export class PlaybooksInternalController {
       throw new UnauthorizedException('tenantId query param required');
     }
 
-    const rows = await this.templates.list(tid);
+    const rows = await this.templates.listForCatalog(tid);
     return {
       templates: rows.map((r) => ({
         key: r.key,
         title: r.title,
         description: r.description,
         steps: r.steps,
+        sourceTextExcerpt: r.sourceTextExcerpt,
       })),
     };
   }
