@@ -15,7 +15,6 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { SkipThrottle } from '@nestjs/throttler';
-import { memoryStorage } from 'multer';
 
 import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -89,7 +88,7 @@ export class PlaybooksAdminController {
   @AdminOnly()
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: memoryStorage(),
+      // Default Nest storage is memory (no direct `multer` import — avoids MODULE_NOT_FOUND in Docker).
       limits: { fileSize: PLAYBOOK_PDF_MAX_BYTES, files: 1 },
     }),
   )
