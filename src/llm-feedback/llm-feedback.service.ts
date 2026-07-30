@@ -31,6 +31,9 @@ export class LLMFeedbackService {
       let severity: 'info' | 'warning' | 'critical' = 'info';
       let spinPhase: string | undefined;
       let spinRisk: boolean | undefined;
+      let feedbackTier: string | undefined;
+      let parentTurnId: string | undefined;
+      let specialist: Record<string, unknown> | undefined;
       try {
         const raw = event.analysis.conversationStateJson;
         if (raw && raw !== '{}') {
@@ -44,6 +47,19 @@ export class LLMFeedbackService {
             }
             if (typeof cs.alerta_risco_spin === 'boolean') {
               spinRisk = cs.alerta_risco_spin;
+            }
+            if (cs._feedbackTier === 'secondary') {
+              feedbackTier = 'secondary';
+            }
+            if (typeof cs._parentTurnId === 'string') {
+              parentTurnId = cs._parentTurnId;
+            }
+            if (
+              cs._specialist &&
+              typeof cs._specialist === 'object' &&
+              !Array.isArray(cs._specialist)
+            ) {
+              specialist = cs._specialist as Record<string, unknown>;
             }
           }
         }
@@ -84,6 +100,9 @@ export class LLMFeedbackService {
           ...(event.participantRole ? { participantRole: event.participantRole } : {}),
           ...(spinPhase !== undefined ? { spinPhase } : {}),
           ...(spinRisk !== undefined ? { spinRisk } : {}),
+          ...(feedbackTier ? { tier: feedbackTier } : {}),
+          ...(parentTurnId ? { parentTurnId } : {}),
+          ...(specialist ? { specialist } : {}),
           ...(playbook ? { playbook } : {}),
         },
       });
