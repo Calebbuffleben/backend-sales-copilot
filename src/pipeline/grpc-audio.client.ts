@@ -46,17 +46,13 @@ export class GrpcAudioClient implements OnModuleDestroy {
   private readonly streamTimeoutMs: number;
 
   constructor() {
-    // Python listens on plain gRPC (insecure) at GRPC_PORT (50051). On Railway,
-    // set GRPC_AUDIO_SERVICE_URL to <exact-service-name>.railway.internal:50051
-    // (same project + Private Networking). Do not guess the service name here.
+    // Python listens on plain gRPC (insecure) at GRPC_PORT (50051) on the private mesh.
+    // Desktop hot path uses WSS direct to Python; this client is fallback / phase-2.
     const configuredServiceUrl =
       process.env.GRPC_AUDIO_SERVICE_URL || 'localhost:50051';
-    if (
-      !process.env.GRPC_AUDIO_SERVICE_URL &&
-      (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_NAME)
-    ) {
+    if (!process.env.GRPC_AUDIO_SERVICE_URL && process.env.NODE_ENV === 'production') {
       this.logger.warn(
-        'GRPC_AUDIO_SERVICE_URL is unset — using localhost:50051. On Railway, set it to your Python service private host: <name-from-dashboard>.railway.internal:50051',
+        'GRPC_AUDIO_SERVICE_URL is unset — using localhost:50051. Set host:port for private Python gRPC if Nest→Python StreamAudio is required.',
       );
     }
     const normalizedTarget = this.normalizeGrpcTarget(configuredServiceUrl);
@@ -96,12 +92,14 @@ export class GrpcAudioClient implements OnModuleDestroy {
       };
     }
 
-    // host:port — infer TLS for public HTTPS edges; plain gRPC for :50051 / private mesh
+    // host:port — infer TLS for public HTTPS edges; plain gRPC for private mesh / :50051
     const lastColon = value.lastIndexOf(':');
     const maybeHost = lastColon > 0 ? value.slice(0, lastColon) : value;
     const maybePort = lastColon > 0 ? value.slice(lastColon + 1) : '';
-    const isPrivateRailway = /\.railway\.internal$/i.test(maybeHost);
-    if (isPrivateRailway) {
+    const isPrivateMesh =
+      /\.railway\.internal$/i.test(maybeHost) ||
+      /\.internal$/i.test(maybeHost);
+    if (isPrivateMesh) {
       return { target: value, useTls: false };
     }
 

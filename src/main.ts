@@ -53,6 +53,9 @@ function buildGrpcServerCredentials(): grpc.ServerCredentials {
   const certPath = process.env.GRPC_TLS_SERVER_CERT;
   const keyPath = process.env.GRPC_TLS_SERVER_KEY;
   const caPath = process.env.GRPC_TLS_CLIENT_CA;
+  // Cloud Run (Envoy sidecar): TLS terminates at the edge; Nest sees cleartext gRPC.
+  const tlsTerminatedAtEdge =
+    process.env.GRPC_TLS_TERMINATED_AT_EDGE === 'true';
 
   if (certPath && keyPath) {
     const cert = readFileSync(certPath);
@@ -66,14 +69,20 @@ function buildGrpcServerCredentials(): grpc.ServerCredentials {
     );
   }
 
-  if (isProd) {
+  if (isProd && !tlsTerminatedAtEdge) {
     throw new Error(
-      'gRPC insecure credentials refused in production. Set GRPC_TLS_SERVER_CERT + GRPC_TLS_SERVER_KEY (and GRPC_TLS_CLIENT_CA for mTLS).',
+      'gRPC insecure credentials refused in production. Set GRPC_TLS_SERVER_CERT + GRPC_TLS_SERVER_KEY (and GRPC_TLS_CLIENT_CA for mTLS), or GRPC_TLS_TERMINATED_AT_EDGE=true behind Cloud Run/Envoy.',
     );
   }
-  console.warn(
-    '[bootstrap] gRPC running with insecure credentials (dev only). Configure GRPC_TLS_* for production.',
-  );
+  if (tlsTerminatedAtEdge) {
+    console.log(
+      '[bootstrap] gRPC insecure on container port (TLS terminated at edge / Envoy).',
+    );
+  } else {
+    console.warn(
+      '[bootstrap] gRPC running with insecure credentials (dev only). Configure GRPC_TLS_* for production.',
+    );
+  }
   return grpc.ServerCredentials.createInsecure();
 }
 
@@ -188,7 +197,7 @@ async function bootstrap() {
   );
 
   const grpcHost = parseGrpcAudioHostname();
-  if (grpcHost && /\.railway\.internal$/i.test(grpcHost)) {
+  if (grpcHost && grpcHost !== 'localhost' && grpcHost !== '127.0.0.1') {
     try {
       const { address } = await dns.lookup(grpcHost);
       console.log(`[bootstrap] GRPC_AUDIO DNS OK | ${grpcHost} → ${address}`);
@@ -196,7 +205,7 @@ async function bootstrap() {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(
         `[bootstrap] GRPC_AUDIO DNS FAILED | host=${grpcHost} | ${msg}`,
-        '\n[bootstrap] Fix: backend + Python no MESMO projeto Railway; Private Networking ligado; GRPC_AUDIO_SERVICE_URL = nome exato do serviço Python no painel + .railway.internal:50051 (não use o domínio público *.up.railway.app como host interno).',
+        '\n[bootstrap] Fix: set GRPC_AUDIO_SERVICE_URL to a resolvable host:port for the Python audio gRPC (private mesh / Cloud Run). Hot path desktop uses WSS direct to Python and does not need this.',
       );
     }
   }

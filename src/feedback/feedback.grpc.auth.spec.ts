@@ -47,11 +47,15 @@ describe('FeedbackGrpcServer.authenticate', () => {
     const llm = {
       handleIngress: jest.fn(async () => undefined),
     };
+    const sessions = {
+      touchFromFeedbackIngress: jest.fn(async () => undefined),
+    };
     const server = new FeedbackGrpcServer(
       llm as any,
       jwt,
       prisma as any,
       tenantCtx,
+      sessions as any,
     );
     return { server, jwt, prisma, auditCalls };
   };
