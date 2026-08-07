@@ -27,7 +27,8 @@ on:
 
 env:
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
-  REGION: us-central1
+  # Artifact Registry repo `backend` está em southamerica-east1 (não us-central1)
+  REGION: southamerica-east1
   SERVICE_NAME: backend
   AR_REPO: backend
   IMAGE_NAME: backend
