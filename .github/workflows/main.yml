@@ -106,23 +106,21 @@ jobs:
           echo "IMAGE_SHA=${IMAGE}:${{ github.sha }}" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
 
-      # Build+push dentro do GCP (evita docker push do runner, que estava tomando 403)
+      # Build+push no GCP. APIs Cloud Build + Artifact Registry já devem estar
+      # habilitadas no projeto (a SA do GitHub não precisa de serviceusage.serviceUsageAdmin).
       - name: Build and Push via Cloud Build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com \
-            --project="${PROJECT_ID}"
 
-          # Cloud Build autentica com a SA do Cloud Build no projeto;
-          # essa SA precisa de roles/artifactregistry.writer no repo/projeto.
-          # Cloud Build global; a imagem vai para o AR em southamerica-east1 (tag completa).
+          # Cloud Build SA (PROJECT_NUMBER@cloudbuild.gserviceaccount.com) precisa de
+          # roles/artifactregistry.writer. A SA github-actions precisa de
+          # roles/cloudbuild.builds.editor + roles/iam.serviceAccountUser.
           gcloud builds submit \
             --project="${PROJECT_ID}" \
             --tag="${IMAGE_SHA}" \
             .
 
-          # Tag :latest apontando para a mesma imagem
           gcloud artifacts docker tags add "${IMAGE_SHA}" "${IMAGE_LATEST}" \
             --project="${PROJECT_ID}"
 
