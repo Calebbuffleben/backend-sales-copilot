@@ -7,8 +7,15 @@
 #
 # GitHub Secrets (obrigatório para deploy):
 #   GCP_SA_KEY — JSON da service account
-#     Roles: artifactregistry.writer, run.admin, iam.serviceAccountUser,
-#            secretmanager.secretAccessor (se usar --set-secrets)
+#     Roles na SA do GitHub:
+#       - roles/cloudbuild.builds.editor  (submit do build)
+#       - roles/iam.serviceAccountUser    (usar SA do Cloud Build / Cloud Run)
+#       - roles/artifactregistry.writer   (opcional se push for só via Cloud Build)
+#       - roles/run.admin
+#       - roles/secretmanager.secretAccessor (se usar --set-secrets)
+#     Na SA padrão do Cloud Build (PROJECT_NUMBER@cloudbuild.gserviceaccount.com):
+#       - roles/artifactregistry.writer
+#       - roles/logging.logWriter
 #
 # GitHub Variables (obrigatório para deploy):
 #   GCP_PROJECT_ID — Settings → Secrets and variables → Actions → aba Variables
@@ -78,33 +85,17 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/setup-gcloud@v2
 
-      # Mostra QUAL SA o GCP_SA_KEY está usando — tem que ser a mesma do IAM Writer
-      - name: Debug GCP identity and Artifact Registry access
+      - name: Debug GCP identity
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          echo "Active account:"
-          gcloud auth list
+          echo "GitHub SA (from GCP_SA_KEY) — confira este e-mail no IAM:"
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
           echo "Project: $(gcloud config get-value project)"
-          echo "Describing repository ${AR_REPO} in ${REGION}..."
           gcloud artifacts repositories describe "${AR_REPO}" \
             --location="${REGION}" \
-            --project="${PROJECT_ID}"
-          echo "IAM on repository (who can upload):"
-          gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
-            --location="${REGION}" \
             --project="${PROJECT_ID}" \
-            --format=json || true
-          echo "Test token (length only):"
-          TOKEN="$(gcloud auth print-access-token)"
-          echo "access_token_len=${#TOKEN}"
-
-      - name: Docker login to Artifact Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          REGISTRY="${REGION}-docker.pkg.dev"
-          gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin "${REGISTRY}"
+            --format='yaml(name,format,createTime)'
 
       - name: Image metadata
         id: meta
@@ -115,12 +106,25 @@ jobs:
           echo "IMAGE_SHA=${IMAGE}:${{ github.sha }}" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
 
-      - name: Build and Push to Artifact Registry
+      # Build+push dentro do GCP (evita docker push do runner, que estava tomando 403)
+      - name: Build and Push via Cloud Build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          docker build -f Dockerfile -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
-          docker push "${IMAGE_SHA}"
-          docker push "${IMAGE_LATEST}"
+          set -euo pipefail
+          gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com \
+            --project="${PROJECT_ID}"
+
+          # Cloud Build autentica com a SA do Cloud Build no projeto;
+          # essa SA precisa de roles/artifactregistry.writer no repo/projeto.
+          # Cloud Build global; a imagem vai para o AR em southamerica-east1 (tag completa).
+          gcloud builds submit \
+            --project="${PROJECT_ID}" \
+            --tag="${IMAGE_SHA}" \
+            .
+
+          # Tag :latest apontando para a mesma imagem
+          gcloud artifacts docker tags add "${IMAGE_SHA}" "${IMAGE_LATEST}" \
+            --project="${PROJECT_ID}"
 
   # ---------------------------------------------------------------------------
   # main only: deploy Cloud Run
