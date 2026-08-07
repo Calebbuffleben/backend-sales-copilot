@@ -1,28 +1,26 @@
-# CI/CD: GitHub Actions → Artifact Registry → Cloud Run
+# CI/CD: GitHub Actions → docker build/push → Artifact Registry → Cloud Run
 #
 # Repo root = esta pasta (backend/).
 #
-# pull_request: só builda a imagem (não precisa GCP_PROJECT_ID / GCP_SA_KEY)
-# push main: build → push Artifact Registry → deploy Cloud Run
+# pull_request: só `docker build` (sem GCP)
+# push main: docker build → push AR → deploy Cloud Run
 #
-# GitHub Secrets (obrigatório para deploy):
-#   GCP_SA_KEY — JSON da service account
-#     Roles na SA do GitHub:
-#       - roles/cloudbuild.builds.editor  (submit do build)
-#       - roles/iam.serviceAccountUser    (usar SA do Cloud Build / Cloud Run)
-#       - roles/artifactregistry.writer   (opcional se push for só via Cloud Build)
-#       - roles/run.admin
-#       - roles/secretmanager.secretAccessor (se usar --set-secrets)
-#     Na SA padrão do Cloud Build (PROJECT_NUMBER@cloudbuild.gserviceaccount.com):
-#       - roles/artifactregistry.writer
-#       - roles/logging.logWriter
+# Secret obrigatório:
+#   GCP_SA_KEY — JSON da SA github-actions@PROJECT_ID.iam.gserviceaccount.com
 #
-# GitHub Variables (obrigatório para deploy):
-#   GCP_PROJECT_ID — Settings → Secrets and variables → Actions → aba Variables
-#   (também aceita Secret com o mesmo nome)
+# Variable obrigatória:
+#   GCP_PROJECT_ID — aba Variables (não Environments)
 #
-# Secret Manager (deploy):
-#   meet-database-url, meet-jwt-private-key, meet-jwt-public-key, meet-service-bootstrap-key
+# IAM obrigatório na SA github-actions@… (projeto iluma-504019):
+#   1) Artifact Registry Writer  — no PROJETO e/ou no repositório AR `backend`
+#      Console: Artifact Registry → backend → Permissions → Grant access
+#      Principal: github-actions@iluma-504019.iam.gserviceaccount.com
+#      Role: Artifact Registry Writer
+#   2) Cloud Run Admin
+#   3) Service Account User  (para a runtime SA do Cloud Run)
+#   4) Secret Manager Secret Accessor (se usar --set-secrets)
+#
+# NÃO usamos Cloud Build (bloqueio de bucket/org policy neste projeto).
 
 name: Deploy to Cloud Run
 
@@ -34,16 +32,12 @@ on:
 
 env:
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
-  # Artifact Registry repo `backend` está em southamerica-east1 (não us-central1)
   REGION: southamerica-east1
   SERVICE_NAME: backend
   AR_REPO: backend
   IMAGE_NAME: backend
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # PR: valida Dockerfile sem tocar no GCP
-  # ---------------------------------------------------------------------------
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -66,9 +60,7 @@ jobs:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
         run: |
           if [ -z "${PROJECT_ID}" ]; then
-            echo "::error::GCP_PROJECT_ID está vazio no push para main."
-            echo "Crie em: Settings → Secrets and variables → Actions → aba Variables"
-            echo "Nome exato: GCP_PROJECT_ID"
+            echo "::error::GCP_PROJECT_ID está vazio. Settings → Actions → Variables."
             exit 1
           fi
           echo "Using GCP project: ${PROJECT_ID}"
@@ -85,48 +77,41 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Debug GCP identity
+      - name: Debug identity
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          echo "GitHub SA (from GCP_SA_KEY) — confira este e-mail no IAM:"
-          gcloud auth list --filter=status:ACTIVE --format='value(account)'
-          echo "Project: $(gcloud config get-value project)"
+          ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          echo "Active SA: ${ACCOUNT}"
+          echo "This exact email must have Artifact Registry Writer on repo '${AR_REPO}'."
           gcloud artifacts repositories describe "${AR_REPO}" \
             --location="${REGION}" \
             --project="${PROJECT_ID}" \
-            --format='yaml(name,format,createTime)'
+            --format='value(name)'
 
       - name: Image metadata
         id: meta
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}"
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${IMAGE_NAME}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "IMAGE_SHA=${IMAGE}:${{ github.sha }}" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
 
-      # Build+push no GCP. APIs Cloud Build + Artifact Registry já devem estar
-      # habilitadas no projeto (a SA do GitHub não precisa de serviceusage.serviceUsageAdmin).
-      - name: Build and Push via Cloud Build
+      - name: Docker login to Artifact Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          gcloud auth print-access-token \
+            | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev"
+
+      - name: Build and Push Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+          docker build -f Dockerfile -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
+          docker push "${IMAGE_SHA}"
+          docker push "${IMAGE_LATEST}"
 
-          # Cloud Build SA (PROJECT_NUMBER@cloudbuild.gserviceaccount.com) precisa de
-          # roles/artifactregistry.writer. A SA github-actions precisa de
-          # roles/cloudbuild.builds.editor + roles/iam.serviceAccountUser.
-          gcloud builds submit \
-            --project="${PROJECT_ID}" \
-            --tag="${IMAGE_SHA}" \
-            .
-
-          gcloud artifacts docker tags add "${IMAGE_SHA}" "${IMAGE_LATEST}" \
-            --project="${PROJECT_ID}"
-
-  # ---------------------------------------------------------------------------
-  # main only: deploy Cloud Run
-  # ---------------------------------------------------------------------------
   deploy:
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
