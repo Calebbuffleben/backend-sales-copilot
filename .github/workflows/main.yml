@@ -78,9 +78,33 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
+      # Mostra QUAL SA o GCP_SA_KEY está usando — tem que ser a mesma do IAM Writer
+      - name: Debug GCP identity and Artifact Registry access
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+        run: |
+          set -euo pipefail
+          echo "Active account:"
+          gcloud auth list
+          echo "Project: $(gcloud config get-value project)"
+          echo "Describing repository ${AR_REPO} in ${REGION}..."
+          gcloud artifacts repositories describe "${AR_REPO}" \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}"
+          echo "IAM on repository (who can upload):"
+          gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --format=json || true
+          echo "Test token (length only):"
+          TOKEN="$(gcloud auth print-access-token)"
+          echo "access_token_len=${#TOKEN}"
+
+      - name: Docker login to Artifact Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          REGISTRY="${REGION}-docker.pkg.dev"
+          gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin "${REGISTRY}"
 
       - name: Image metadata
         id: meta
