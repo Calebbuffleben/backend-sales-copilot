@@ -1,26 +1,19 @@
-# CI/CD: GitHub Actions → docker build/push → Artifact Registry → Cloud Run
+# CI/CD: GitHub Actions → Artifact Registry → Cloud Run
 #
-# Repo root = esta pasta (backend/).
+# SA do secret GCP_SA_KEY (obrigatório no AR):
+#   github-actions@iluma-504019.iam.gserviceaccount.com
 #
-# pull_request: só `docker build` (sem GCP)
-# push main: docker build → push AR → deploy Cloud Run
+# Grant NO REPOSITÓRIO (não só no projeto):
+#   gcloud artifacts repositories add-iam-policy-binding backend \
+#     --project=iluma-504019 \
+#     --location=southamerica-east1 \
+#     --member="serviceAccount:github-actions@iluma-504019.iam.gserviceaccount.com" \
+#     --role="roles/artifactregistry.writer"
 #
-# Secret obrigatório:
-#   GCP_SA_KEY — JSON da SA github-actions@PROJECT_ID.iam.gserviceaccount.com
-#
-# Variable obrigatória:
-#   GCP_PROJECT_ID — aba Variables (não Environments)
-#
-# IAM obrigatório na SA github-actions@… (projeto iluma-504019):
-#   1) Artifact Registry Writer  — no PROJETO e/ou no repositório AR `backend`
-#      Console: Artifact Registry → backend → Permissions → Grant access
-#      Principal: github-actions@iluma-504019.iam.gserviceaccount.com
-#      Role: Artifact Registry Writer
-#   2) Cloud Run Admin
-#   3) Service Account User  (para a runtime SA do Cloud Run)
-#   4) Secret Manager Secret Accessor (se usar --set-secrets)
-#
-# NÃO usamos Cloud Build (bloqueio de bucket/org policy neste projeto).
+# Confira no Console:
+#   Artifact Registry → backend → Permissions
+#   Tem que listar github-actions@… com "Artifact Registry Writer"
+#   Sem condição (condition) no binding.
 
 name: Deploy to Cloud Run
 
@@ -60,10 +53,9 @@ jobs:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
         run: |
           if [ -z "${PROJECT_ID}" ]; then
-            echo "::error::GCP_PROJECT_ID está vazio. Settings → Actions → Variables."
+            echo "::error::GCP_PROJECT_ID vazio (Settings → Actions → Variables)"
             exit 1
           fi
-          echo "Using GCP project: ${PROJECT_ID}"
           echo "PROJECT_ID=${PROJECT_ID}" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
@@ -77,17 +69,36 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Debug identity
+      - name: Verify Artifact Registry upload permission
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
           echo "Active SA: ${ACCOUNT}"
-          echo "This exact email must have Artifact Registry Writer on repo '${AR_REPO}'."
-          gcloud artifacts repositories describe "${AR_REPO}" \
+          echo "Expected:  github-actions@${PROJECT_ID}.iam.gserviceaccount.com"
+          echo ""
+          echo "Repository IAM policy:"
+          gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}"
+          echo ""
+          echo "testIamPermissions (uploadArtifacts):"
+          RESULT="$(gcloud artifacts repositories test-iam-permissions "${AR_REPO}" \
             --location="${REGION}" \
             --project="${PROJECT_ID}" \
-            --format='value(name)'
+            --permissions=artifactregistry.repositories.uploadArtifacts,artifactregistry.repositories.downloadArtifacts \
+            --format=json)"
+          echo "${RESULT}"
+          if ! echo "${RESULT}" | grep -q 'uploadArtifacts'; then
+            echo "::error::Esta SA NÃO tem uploadArtifacts no repo ${AR_REPO}."
+            echo "Rode como Owner do projeto:"
+            echo "gcloud artifacts repositories add-iam-policy-binding ${AR_REPO} \\"
+            echo "  --project=${PROJECT_ID} --location=${REGION} \\"
+            echo "  --member=serviceAccount:${ACCOUNT} \\"
+            echo "  --role=roles/artifactregistry.writer"
+            exit 1
+          fi
+          echo "OK: uploadArtifacts permitido para ${ACCOUNT}"
 
       - name: Image metadata
         id: meta
@@ -102,7 +113,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           gcloud auth print-access-token \
-            | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev"
+            | docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"
 
       - name: Build and Push Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
