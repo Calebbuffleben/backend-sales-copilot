@@ -10,8 +10,10 @@
 #       - roles/iam.serviceAccountUser
 #       - roles/secretmanager.secretAccessor  (se usar --set-secrets)
 #
-# GitHub Variables (obrigatório):
-#   GCP_PROJECT_ID — ID do projeto GCP
+# GCP_PROJECT_ID — ID do projeto GCP. Preferência:
+#   Settings → Secrets and variables → Actions → Variables (aba Variables)
+#   Também aceita Secret com o mesmo nome (fallback).
+#   NÃO use Environment variable sem declarar `environment:` no job.
 #
 # Secret Manager (recomendado; nomes usados no deploy):
 #   meet-database-url, meet-jwt-private-key, meet-jwt-public-key, meet-service-bootstrap-key
@@ -27,7 +29,8 @@ on:
     branches: [main]
 
 env:
-  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  # vars.* = Repository/Organization Variables | secrets.* = Secrets
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
   REGION: us-central1
   SERVICE_NAME: backend
   # {REGION}-docker.pkg.dev/{PROJECT_ID}/{AR_REPO}/{IMAGE_NAME}
@@ -48,11 +51,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Require GCP_PROJECT_ID
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
         run: |
-          if [ -z "${{ env.PROJECT_ID }}" ]; then
-            echo "Defina a Variables do repositório: GCP_PROJECT_ID" >&2
+          if [ -z "${PROJECT_ID}" ]; then
+            echo "::error::GCP_PROJECT_ID está vazio."
+            echo "Crie em: Settings → Secrets and variables → Actions → aba Variables"
+            echo "Nome exato: GCP_PROJECT_ID (não em Environments, a menos que o job use environment:)"
+            echo "Se colocou em Secrets, o workflow também aceita secrets.GCP_PROJECT_ID."
             exit 1
           fi
+          echo "Using GCP project: ${PROJECT_ID}"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
