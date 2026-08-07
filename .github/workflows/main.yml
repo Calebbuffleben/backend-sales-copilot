@@ -76,29 +76,23 @@ jobs:
           ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
           echo "Active SA: ${ACCOUNT}"
           echo "Expected:  github-actions@${PROJECT_ID}.iam.gserviceaccount.com"
-          echo ""
-          echo "Repository IAM policy:"
-          gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
-            --location="${REGION}" \
-            --project="${PROJECT_ID}"
-          echo ""
-          echo "testIamPermissions (uploadArtifacts):"
-          RESULT="$(gcloud artifacts repositories test-iam-permissions "${AR_REPO}" \
+
+          POLICY="$(gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
             --location="${REGION}" \
             --project="${PROJECT_ID}" \
-            --permissions=artifactregistry.repositories.uploadArtifacts,artifactregistry.repositories.downloadArtifacts \
             --format=json)"
-          echo "${RESULT}"
-          if ! echo "${RESULT}" | grep -q 'uploadArtifacts'; then
-            echo "::error::Esta SA NÃO tem uploadArtifacts no repo ${AR_REPO}."
-            echo "Rode como Owner do projeto:"
-            echo "gcloud artifacts repositories add-iam-policy-binding ${AR_REPO} \\"
-            echo "  --project=${PROJECT_ID} --location=${REGION} \\"
-            echo "  --member=serviceAccount:${ACCOUNT} \\"
-            echo "  --role=roles/artifactregistry.writer"
+          echo "Repository IAM policy:"
+          echo "${POLICY}"
+
+          if ! echo "${POLICY}" | grep -q "${ACCOUNT}"; then
+            echo "::error::SA ${ACCOUNT} não aparece no IAM do repo ${AR_REPO}."
             exit 1
           fi
-          echo "OK: uploadArtifacts permitido para ${ACCOUNT}"
+          if ! echo "${POLICY}" | grep -q 'roles/artifactregistry.writer'; then
+            echo "::error::Repo ${AR_REPO} sem roles/artifactregistry.writer."
+            exit 1
+          fi
+          echo "OK: ${ACCOUNT} tem Artifact Registry Writer no repo."
 
       - name: Image metadata
         id: meta
