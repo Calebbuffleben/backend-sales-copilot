@@ -2,23 +2,20 @@
 #
 # Repo root = esta pasta (backend/).
 #
-# GitHub Secrets (obrigatório):
+# pull_request: só builda a imagem (não precisa GCP_PROJECT_ID / GCP_SA_KEY)
+# push main: build → push Artifact Registry → deploy Cloud Run
+#
+# GitHub Secrets (obrigatório para deploy):
 #   GCP_SA_KEY — JSON da service account
-#     Roles mínimas na SA:
-#       - roles/artifactregistry.writer
-#       - roles/run.admin
-#       - roles/iam.serviceAccountUser
-#       - roles/secretmanager.secretAccessor  (se usar --set-secrets)
+#     Roles: artifactregistry.writer, run.admin, iam.serviceAccountUser,
+#            secretmanager.secretAccessor (se usar --set-secrets)
 #
-# GCP_PROJECT_ID — ID do projeto GCP. Preferência:
-#   Settings → Secrets and variables → Actions → Variables (aba Variables)
-#   Também aceita Secret com o mesmo nome (fallback).
-#   NÃO use Environment variable sem declarar `environment:` no job.
+# GitHub Variables (obrigatório para deploy):
+#   GCP_PROJECT_ID — Settings → Secrets and variables → Actions → aba Variables
+#   (também aceita Secret com o mesmo nome)
 #
-# Secret Manager (recomendado; nomes usados no deploy):
+# Secret Manager (deploy):
 #   meet-database-url, meet-jwt-private-key, meet-jwt-public-key, meet-service-bootstrap-key
-# Se ainda não existirem, o job "Deploy" falha no --set-secrets — crie-os antes ou
-# remova a flag --set-secrets e configure no Console.
 
 name: Deploy to Cloud Run
 
@@ -29,15 +26,16 @@ on:
     branches: [main]
 
 env:
-  # vars.* = Repository/Organization Variables | secrets.* = Secrets
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
   REGION: us-central1
   SERVICE_NAME: backend
-  # {REGION}-docker.pkg.dev/{PROJECT_ID}/{AR_REPO}/{IMAGE_NAME}
   AR_REPO: backend
   IMAGE_NAME: backend
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # PR: valida Dockerfile sem tocar no GCP
+  # ---------------------------------------------------------------------------
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -50,55 +48,58 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build Docker image (PR check)
+        if: github.event_name == 'pull_request'
+        run: docker build -f Dockerfile -t backend:pr-${{ github.sha }} .
+
       - name: Require GCP_PROJECT_ID
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
         run: |
           if [ -z "${PROJECT_ID}" ]; then
-            echo "::error::GCP_PROJECT_ID está vazio."
+            echo "::error::GCP_PROJECT_ID está vazio no push para main."
             echo "Crie em: Settings → Secrets and variables → Actions → aba Variables"
-            echo "Nome exato: GCP_PROJECT_ID (não em Environments, a menos que o job use environment:)"
-            echo "Se colocou em Secrets, o workflow também aceita secrets.GCP_PROJECT_ID."
+            echo "Nome exato: GCP_PROJECT_ID"
             exit 1
           fi
           echo "Using GCP project: ${PROJECT_ID}"
+          echo "PROJECT_ID=${PROJECT_ID}" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
           project_id: ${{ env.PROJECT_ID }}
 
       - name: Set up gcloud
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
       - name: Image metadata
         id: meta
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
           echo "IMAGE_SHA=${IMAGE}:${{ github.sha }}" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
 
-      - name: Build Docker image
-        run: |
-          docker build \
-            -f Dockerfile \
-            -t "${IMAGE_SHA}" \
-            -t "${IMAGE_LATEST}" \
-            .
-
-      # Em PR: só valida o build. Em push main: publica no Artifact Registry.
-      - name: Push to Artifact Registry
+      - name: Build and Push to Artifact Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          docker build -f Dockerfile -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
           docker push "${IMAGE_SHA}"
           docker push "${IMAGE_LATEST}"
 
+  # ---------------------------------------------------------------------------
+  # main only: deploy Cloud Run
+  # ---------------------------------------------------------------------------
   deploy:
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -107,6 +108,16 @@ jobs:
       contents: read
 
     steps:
+      - name: Resolve project id
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+        run: |
+          if [ -z "${PROJECT_ID}" ]; then
+            echo "::error::GCP_PROJECT_ID vazio" >&2
+            exit 1
+          fi
+          echo "PROJECT_ID=${PROJECT_ID}" >> "$GITHUB_ENV"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
