@@ -27,6 +27,7 @@ env:
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
   REGION: southamerica-east1
   SERVICE_NAME: backend
+  # Precisa ser repositório Docker Mode=Standard (NÃO Remote — Remote não aceita push)
   AR_REPO: backend
   IMAGE_NAME: backend
 
