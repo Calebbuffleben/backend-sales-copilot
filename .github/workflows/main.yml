@@ -38,7 +38,8 @@ jobs:
       contents: read
 
     outputs:
-      image: ${{ steps.meta.outputs.image }}
+      # URI completa com tag (não só o path base)
+      image: ${{ steps.push.outputs.image }}
 
     steps:
       - name: Checkout
@@ -95,15 +96,6 @@ jobs:
           fi
           echo "OK: ${ACCOUNT} tem Artifact Registry Writer no repo."
 
-      - name: Image metadata
-        id: meta
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${IMAGE_NAME}"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_SHA=${IMAGE}:${{ github.sha }}" >> "$GITHUB_ENV"
-          echo "IMAGE_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
-
       - name: Docker login to Artifact Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -111,12 +103,18 @@ jobs:
             | docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"
 
       - name: Build and Push Docker image
+        id: push
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}"
+          IMAGE_SHA="${IMAGE}:${{ github.sha }}"
+          IMAGE_LATEST="${IMAGE}:latest"
+          echo "Pushing ${IMAGE_SHA}"
           docker build -f Dockerfile -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
           docker push "${IMAGE_SHA}"
           docker push "${IMAGE_LATEST}"
+          echo "image=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build-and-push
@@ -146,9 +144,17 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Deploy to Cloud Run
+        env:
+          IMAGE_SHA: ${{ needs.build-and-push.outputs.image }}
         run: |
           set -euo pipefail
-          IMAGE_SHA="${{ needs.build-and-push.outputs.image }}:${{ github.sha }}"
+
+          # Fallback se o output do job anterior vier vazio
+          if [ -z "${IMAGE_SHA}" ] || [[ "${IMAGE_SHA}" == :* ]]; then
+            IMAGE_SHA="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          fi
+
+          echo "Deploying image: ${IMAGE_SHA}"
 
           gcloud run deploy "${{ env.SERVICE_NAME }}" \
             --project="${{ env.PROJECT_ID }}" \
