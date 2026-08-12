@@ -146,6 +146,14 @@ jobs:
       - name: Deploy to Cloud Run
         env:
           IMAGE_SHA: ${{ needs.build-and-push.outputs.image }}
+          # Credenciais atuais do backend. Cadastre em:
+          # GitHub → Settings → Secrets and variables → Actions → Secrets.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SERVICE_BOOTSTRAP_KEY: ${{ secrets.SERVICE_BOOTSTRAP_KEY }}
+          PLATFORM_ADMIN_API_TOKEN: ${{ secrets.PLATFORM_ADMIN_API_TOKEN }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          DEEP_REDIS_URL: ${{ secrets.DEEP_REDIS_URL }}
         run: |
           set -euo pipefail
 
@@ -156,6 +164,63 @@ jobs:
 
           echo "Deploying image: ${IMAGE_SHA}"
 
+          # O backend conecta ao Postgres e inicializa o JWT durante o boot.
+          if [ -z "${DATABASE_URL}" ] || [ -z "${JWT_SECRET}" ] || [ -z "${SERVICE_BOOTSTRAP_KEY}" ]; then
+            echo "::error::Cadastre os GitHub Secrets DATABASE_URL, JWT_SECRET e SERVICE_BOOTSTRAP_KEY."
+            exit 1
+          fi
+
+          # JSON é aceito por --env-vars-file e preserva URLs/senhas sem problemas
+          # de escaping. Não imprimir este arquivo: ele contém credenciais.
+          jq -n \
+            --arg databaseUrl "${DATABASE_URL}" \
+            --arg jwtSecret "${JWT_SECRET}" \
+            --arg bootstrapKey "${SERVICE_BOOTSTRAP_KEY}" \
+            --arg platformToken "${PLATFORM_ADMIN_API_TOKEN}" \
+            --arg redisUrl "${REDIS_URL}" \
+            --arg deepRedisUrl "${DEEP_REDIS_URL}" \
+            '{
+              NODE_ENV: "development",
+              DATABASE_URL: $databaseUrl,
+              JWT_SECRET: $jwtSecret,
+              JWT_ISSUER: "meet-backend",
+              JWT_AUDIENCE: "meet-platform",
+              JWT_ACCESS_TTL_SECONDS: "900",
+              JWT_REFRESH_TTL_SECONDS: "2592000",
+              ALLOW_SELF_SIGNUP: "true",
+              SERVICE_BOOTSTRAP_KEY: $bootstrapKey,
+              AUDIO_PIPELINE_GROUP_SECONDS: "0.5",
+              AUDIO_PIPELINE_PAYLOAD: "wav",
+              AUDIO_PIPELINE_NORMALIZE: "false",
+              AUDIO_PIPELINE_COALESCE_MS: "250",
+              TEXT_ANALYSIS_SERVICE_URL: "https://text-analysis-production.up.railway.app",
+              TEXT_ANALYSIS_ENABLED: "true",
+              TEXT_ANALYSIS_TIMEOUT_MS: "5000",
+              AUDIO_TRANSCRIPTION_ENABLED: "true",
+              GRPC_AUDIO_SERVICE_ENABLED: "false",
+              GRPC_STREAM_TIMEOUT_MS: "30000",
+              SALES_CLIENT_INDECISION_COOLDOWN_MS: "0",
+              SALES_SOLUTION_UNDERSTOOD_ENABLED: "true",
+              SALES_SOLUTION_UNDERSTOOD_DEBUG: "true",
+              SALES_SOLUTION_UNDERSTOOD_THRESHOLD: "0.70",
+              SALES_SOLUTION_UNDERSTOOD_COOLDOWN_MS: "120000",
+              SALES_SOLUTION_UNDERSTOOD_MIN_REFORMULATION_CHARS: "40",
+              SALES_SOLUTION_CONTEXT_WINDOW_MS: "90000",
+              SALES_SOLUTION_CONTEXT_MAX_ENTRIES: "12",
+              DEEP_QUEUE_ENABLED: (if $deepRedisUrl != "" then "true" else "false" end),
+              DEEP_AUDIO_STREAM_KEY: "deep:audio_jobs",
+              DEEP_RESULTS_STREAM_KEY: "deep:text_results",
+              PLAYBOOKS_ENABLED: "true",
+              GRPC_TLS_TERMINATED_AT_EDGE: "true",
+              GRPC_FEEDBACK_PORT: "50052"
+            }
+            + (if $platformToken != "" then {PLATFORM_ADMIN_API_TOKEN: $platformToken} else {} end)
+            + (if $redisUrl != "" then {REDIS_URL: $redisUrl} else {} end)
+            + (if $deepRedisUrl != "" then {DEEP_REDIS_URL: $deepRedisUrl} else {} end)' \
+            > cloud-run-env.json
+
+          # Limpa bindings antigos do Secret Manager (JWT_PRIVATE_KEY / JWT_PUBLIC_KEY).
+          # Sem isso, o gcloud reusa os secrets da revisão anterior e o deploy falha.
           gcloud run deploy "${{ env.SERVICE_NAME }}" \
             --project="${{ env.PROJECT_ID }}" \
             --image="${IMAGE_SHA}" \
@@ -164,13 +229,15 @@ jobs:
             --allow-unauthenticated \
             --port=8080 \
             --min-instances=1 \
-            --max-instances=4 \
+            --max-instances=1 \
             --timeout=3600 \
             --cpu=2 \
             --memory=1Gi \
             --cpu-boost \
-            --set-env-vars="NODE_ENV=production,GRPC_TLS_TERMINATED_AT_EDGE=true,GRPC_FEEDBACK_PORT=50052" \
-            --set-secrets="DATABASE_URL=meet-database-url:latest,JWT_PRIVATE_KEY=meet-jwt-private-key:latest,JWT_PUBLIC_KEY=meet-jwt-public-key:latest,SERVICE_BOOTSTRAP_KEY=meet-service-bootstrap-key:latest"
+            --clear-secrets \
+            --env-vars-file=cloud-run-env.json
+
+          rm -f cloud-run-env.json
 
           gcloud run services describe "${{ env.SERVICE_NAME }}" \
             --project="${{ env.PROJECT_ID }}" \
