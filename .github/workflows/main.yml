@@ -219,8 +219,8 @@ jobs:
             + (if $deepRedisUrl != "" then {DEEP_REDIS_URL: $deepRedisUrl} else {} end)' \
             > cloud-run-env.json
 
-          # Limpa bindings antigos do Secret Manager (JWT_PRIVATE_KEY / JWT_PUBLIC_KEY).
-          # Sem isso, o gcloud reusa os secrets da revisão anterior e o deploy falha.
+          # Desvincula envs que eram Secret Manager na revisão antiga, para o
+          # --env-vars-file poder aplicá-las como variáveis normais (GitHub Secrets).
           gcloud run deploy "${{ env.SERVICE_NAME }}" \
             --project="${{ env.PROJECT_ID }}" \
             --image="${IMAGE_SHA}" \
@@ -234,7 +234,7 @@ jobs:
             --cpu=2 \
             --memory=1Gi \
             --cpu-boost \
-            --clear-secrets \
+            --remove-secrets=DATABASE_URL,JWT_PRIVATE_KEY,JWT_PUBLIC_KEY,JWT_SECRET,SERVICE_BOOTSTRAP_KEY \
             --env-vars-file=cloud-run-env.json
 
           rm -f cloud-run-env.json
