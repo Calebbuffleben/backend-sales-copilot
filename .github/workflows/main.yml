@@ -154,8 +154,9 @@ jobs:
           PLATFORM_ADMIN_API_TOKEN: ${{ secrets.PLATFORM_ADMIN_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
           DEEP_REDIS_URL: ${{ secrets.DEEP_REDIS_URL }}
-          # Variable: projeto:regiao:instancia (ex. iluma-504019:southamerica-east1:root)
-          CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME }}
+          # Repository Variable OU Secret (não Environment, a menos que o job use environment:)
+          # Settings → Secrets and variables → Actions → Variables (aba Variables)
+          CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME || secrets.CLOUD_SQL_CONNECTION_NAME }}
         run: |
           set -euo pipefail
 
@@ -176,10 +177,14 @@ jobs:
           # perde o socket /cloudsql/... e o Nest trava no Prisma antes do PORT.
           CLOUD_SQL_CONNECTION="${CLOUD_SQL_CONNECTION_NAME:-}"
           if [ -z "${CLOUD_SQL_CONNECTION}" ]; then
-            echo "::error::Defina a Variable CLOUD_SQL_CONNECTION_NAME (ex.: iluma-504019:southamerica-east1:root)"
+            echo "::error::CLOUD_SQL_CONNECTION_NAME vazio."
+            echo "::error::Crie como Repository variable (não Environment):"
+            echo "::error::Settings → Secrets and variables → Actions → Variables → New repository variable"
+            echo "::error::Name: CLOUD_SQL_CONNECTION_NAME"
+            echo "::error::Value: iluma-504019:southamerica-east1:root"
             exit 1
           fi
-
+          echo "Cloud SQL instance: ${CLOUD_SQL_CONNECTION}"
           usable_redis() {
             local url="${1:-}"
             [ -n "${url}" ] || return 1
