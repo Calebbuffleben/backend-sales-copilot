@@ -138,8 +138,8 @@ async function bootstrap() {
     exposedHeaders: ['X-Request-Id'],
   });
 
-  const port = process.env.PORT ?? 3001;
-  const httpServer = await app.listen(port);
+  const port = Number(process.env.PORT ?? 8080);
+  const httpServer = await app.listen(port, '0.0.0.0');
 
   const egressGateway = app.get(EgressAudioGateway);
   egressGateway.setHttpServer(httpServer);

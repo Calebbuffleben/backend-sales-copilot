@@ -40,13 +40,12 @@ COPY --from=base /app/proto ./proto
 
 RUN mkdir -p storage/egress/audio storage/egress/video storage/pipeline-logs
 
-# HTTP/WS (behind Envoy on Cloud Run: set PORT=3001 on the Nest sidecar)
-EXPOSE 3001
+# HTTP/WS (Cloud Run injeta PORT; default local/container 8080)
+EXPOSE 8080
 # gRPC feedback ingress (Envoy routes application/grpc here)
 EXPOSE 50052
 
 ENV NODE_ENV=production
-ENV PORT=3001
 ENV GRPC_FEEDBACK_PORT=50052
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
