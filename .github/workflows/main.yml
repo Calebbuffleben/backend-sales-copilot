@@ -154,6 +154,8 @@ jobs:
           PLATFORM_ADMIN_API_TOKEN: ${{ secrets.PLATFORM_ADMIN_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
           DEEP_REDIS_URL: ${{ secrets.DEEP_REDIS_URL }}
+          # Variable: projeto:regiao:instancia (ex. iluma-504019:southamerica-east1:root)
+          CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME }}
         run: |
           set -euo pipefail
 
@@ -170,6 +172,33 @@ jobs:
             exit 1
           fi
 
+          # Cloud SQL: sem --set-cloudsql-instances o redeploy do Actions
+          # perde o socket /cloudsql/... e o Nest trava no Prisma antes do PORT.
+          CLOUD_SQL_CONNECTION="${CLOUD_SQL_CONNECTION_NAME:-}"
+          if [ -z "${CLOUD_SQL_CONNECTION}" ]; then
+            echo "::error::Defina a Variable CLOUD_SQL_CONNECTION_NAME (ex.: iluma-504019:southamerica-east1:root)"
+            exit 1
+          fi
+
+          usable_redis() {
+            local url="${1:-}"
+            [ -n "${url}" ] || return 1
+            [[ "${url}" == *".railway.internal"* ]] && return 1
+            return 0
+          }
+          REDIS_FOR_RUN=""
+          DEEP_REDIS_FOR_RUN=""
+          if usable_redis "${REDIS_URL}"; then
+            REDIS_FOR_RUN="${REDIS_URL}"
+          elif [ -n "${REDIS_URL}" ]; then
+            echo "::warning::REDIS_URL ignorada (host privado Railway)."
+          fi
+          if usable_redis "${DEEP_REDIS_URL}"; then
+            DEEP_REDIS_FOR_RUN="${DEEP_REDIS_URL}"
+          elif [ -n "${DEEP_REDIS_URL}" ]; then
+            echo "::warning::DEEP_REDIS_URL ignorada (host privado Railway)."
+          fi
+
           # JSON é aceito por --env-vars-file e preserva URLs/senhas sem problemas
           # de escaping. Não imprimir este arquivo: ele contém credenciais.
           jq -n \
@@ -177,8 +206,8 @@ jobs:
             --arg jwtSecret "${JWT_SECRET}" \
             --arg bootstrapKey "${SERVICE_BOOTSTRAP_KEY}" \
             --arg platformToken "${PLATFORM_ADMIN_API_TOKEN}" \
-            --arg redisUrl "${REDIS_URL}" \
-            --arg deepRedisUrl "${DEEP_REDIS_URL}" \
+            --arg redisUrl "${REDIS_FOR_RUN}" \
+            --arg deepRedisUrl "${DEEP_REDIS_FOR_RUN}" \
             '{
               NODE_ENV: "development",
               DATABASE_URL: $databaseUrl,
@@ -234,6 +263,7 @@ jobs:
             --cpu=2 \
             --memory=1Gi \
             --cpu-boost \
+            --set-cloudsql-instances="${CLOUD_SQL_CONNECTION}" \
             --remove-secrets=DATABASE_URL,JWT_PRIVATE_KEY,JWT_PUBLIC_KEY,JWT_SECRET,SERVICE_BOOTSTRAP_KEY \
             --env-vars-file=cloud-run-env.json
 
