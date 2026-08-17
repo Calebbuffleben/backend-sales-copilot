@@ -227,7 +227,7 @@ jobs:
               AUDIO_PIPELINE_PAYLOAD: "wav",
               AUDIO_PIPELINE_NORMALIZE: "false",
               AUDIO_PIPELINE_COALESCE_MS: "250",
-              TEXT_ANALYSIS_SERVICE_URL: "https://text-analysis-production.up.railway.app",
+              TEXT_ANALYSIS_SERVICE_URL: "https://python-service-770631129946.southamerica-east1.run.app",
               TEXT_ANALYSIS_ENABLED: "true",
               TEXT_ANALYSIS_TIMEOUT_MS: "5000",
               AUDIO_TRANSCRIPTION_ENABLED: "true",
