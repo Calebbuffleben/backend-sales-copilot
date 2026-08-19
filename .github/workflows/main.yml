@@ -1,4 +1,11 @@
-# CI/CD: GitHub Actions → Artifact Registry → Cloud Run
+# CI/CD: GitHub Actions → Artifact Registry → Cloud Run (multi-container)
+#
+# Serviço Cloud Run `backend` = 2 containers:
+#   - envoy (ingress :8080) — HTTP/WS + gRPC mux
+#   - nest  (PORT=3001, gRPC :50052) — app
+#
+# NÃO usar `gcloud run deploy --image … --port=8080` (força single-container).
+# Deploy = render YAML + `gcloud run services replace`.
 #
 # SA do secret GCP_SA_KEY (obrigatório no AR):
 #   github-actions@iluma-504019.iam.gserviceaccount.com
@@ -9,11 +16,6 @@
 #     --location=southamerica-east1 \
 #     --member="serviceAccount:github-actions@iluma-504019.iam.gserviceaccount.com" \
 #     --role="roles/artifactregistry.writer"
-#
-# Confira no Console:
-#   Artifact Registry → backend → Permissions
-#   Tem que listar github-actions@… com "Artifact Registry Writer"
-#   Sem condição (condition) no binding.
 
 name: Deploy to Cloud Run
 
@@ -27,9 +29,10 @@ env:
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
   REGION: southamerica-east1
   SERVICE_NAME: backend
-  # Precisa ser repositório Docker Mode=Standard (NÃO Remote — Remote não aceita push)
   AR_REPO: backend
   IMAGE_NAME: backend
+  ENVOY_IMAGE_NAME: envoy
+  CLOUD_RUN_SA_EMAIL: 770631129946-compute@developer.gserviceaccount.com
 
 jobs:
   build-and-push:
@@ -38,16 +41,19 @@ jobs:
       contents: read
 
     outputs:
-      # URI completa com tag (não só o path base)
-      image: ${{ steps.push.outputs.image }}
+      backend_image: ${{ steps.push.outputs.backend_image }}
+      envoy_image: ${{ steps.push.outputs.envoy_image }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Docker image (PR check)
+      - name: Build Docker images (PR check)
         if: github.event_name == 'pull_request'
-        run: docker build -f Dockerfile -t backend:pr-${{ github.sha }} .
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile -t backend:pr-${{ github.sha }} .
+          docker build -f deploy/envoy/Dockerfile -t envoy:pr-${{ github.sha }} deploy/envoy
 
       - name: Require GCP_PROJECT_ID
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -77,15 +83,10 @@ jobs:
           set -euo pipefail
           ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
           echo "Active SA: ${ACCOUNT}"
-          echo "Expected:  github-actions@${PROJECT_ID}.iam.gserviceaccount.com"
-
           POLICY="$(gcloud artifacts repositories get-iam-policy "${AR_REPO}" \
             --location="${REGION}" \
             --project="${PROJECT_ID}" \
             --format=json)"
-          echo "Repository IAM policy:"
-          echo "${POLICY}"
-
           if ! echo "${POLICY}" | grep -q "${ACCOUNT}"; then
             echo "::error::SA ${ACCOUNT} não aparece no IAM do repo ${AR_REPO}."
             exit 1
@@ -94,7 +95,6 @@ jobs:
             echo "::error::Repo ${AR_REPO} sem roles/artifactregistry.writer."
             exit 1
           fi
-          echo "OK: ${ACCOUNT} tem Artifact Registry Writer no repo."
 
       - name: Docker login to Artifact Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -102,19 +102,29 @@ jobs:
           gcloud auth print-access-token \
             | docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"
 
-      - name: Build and Push Docker image
+      - name: Build and Push Nest + Envoy images
         id: push
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}"
-          IMAGE_SHA="${IMAGE}:${{ github.sha }}"
-          IMAGE_LATEST="${IMAGE}:latest"
-          echo "Pushing ${IMAGE_SHA}"
-          docker build -f Dockerfile -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
-          docker push "${IMAGE_SHA}"
-          docker push "${IMAGE_LATEST}"
-          echo "image=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+          BASE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}"
+          NEST_SHA="${BASE}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          NEST_LATEST="${BASE}/${{ env.IMAGE_NAME }}:latest"
+          ENVOY_SHA="${BASE}/${{ env.ENVOY_IMAGE_NAME }}:${{ github.sha }}"
+          ENVOY_LATEST="${BASE}/${{ env.ENVOY_IMAGE_NAME }}:latest"
+
+          echo "Pushing ${NEST_SHA}"
+          docker build -f Dockerfile -t "${NEST_SHA}" -t "${NEST_LATEST}" .
+          docker push "${NEST_SHA}"
+          docker push "${NEST_LATEST}"
+
+          echo "Pushing ${ENVOY_SHA}"
+          docker build -f deploy/envoy/Dockerfile -t "${ENVOY_SHA}" -t "${ENVOY_LATEST}" deploy/envoy
+          docker push "${ENVOY_SHA}"
+          docker push "${ENVOY_LATEST}"
+
+          echo "backend_image=${NEST_SHA}" >> "$GITHUB_OUTPUT"
+          echo "envoy_image=${ENVOY_SHA}" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build-and-push
@@ -124,6 +134,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Resolve project id
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
@@ -143,48 +156,41 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy to Cloud Run
+      - name: Render YAML and replace Cloud Run service
         env:
-          IMAGE_SHA: ${{ needs.build-and-push.outputs.image }}
-          # Credenciais atuais do backend. Cadastre em:
-          # GitHub → Settings → Secrets and variables → Actions → Secrets.
+          BACKEND_IMAGE: ${{ needs.build-and-push.outputs.backend_image }}
+          ENVOY_IMAGE: ${{ needs.build-and-push.outputs.envoy_image }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           SERVICE_BOOTSTRAP_KEY: ${{ secrets.SERVICE_BOOTSTRAP_KEY }}
           PLATFORM_ADMIN_API_TOKEN: ${{ secrets.PLATFORM_ADMIN_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
           DEEP_REDIS_URL: ${{ secrets.DEEP_REDIS_URL }}
-          # Repository Variable OU Secret (não Environment, a menos que o job use environment:)
-          # Settings → Secrets and variables → Actions → Variables (aba Variables)
           CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME || secrets.CLOUD_SQL_CONNECTION_NAME }}
         run: |
           set -euo pipefail
 
-          # Fallback se o output do job anterior vier vazio
-          if [ -z "${IMAGE_SHA}" ] || [[ "${IMAGE_SHA}" == :* ]]; then
-            IMAGE_SHA="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          if [ -z "${BACKEND_IMAGE}" ] || [[ "${BACKEND_IMAGE}" == :* ]]; then
+            BACKEND_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${IMAGE_NAME}:${{ github.sha }}"
+          fi
+          if [ -z "${ENVOY_IMAGE}" ] || [[ "${ENVOY_IMAGE}" == :* ]]; then
+            ENVOY_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${ENVOY_IMAGE_NAME}:${{ github.sha }}"
           fi
 
-          echo "Deploying image: ${IMAGE_SHA}"
+          echo "Nest image:  ${BACKEND_IMAGE}"
+          echo "Envoy image: ${ENVOY_IMAGE}"
 
-          # O backend conecta ao Postgres e inicializa o JWT durante o boot.
           if [ -z "${DATABASE_URL}" ] || [ -z "${JWT_SECRET}" ] || [ -z "${SERVICE_BOOTSTRAP_KEY}" ]; then
-            echo "::error::Cadastre os GitHub Secrets DATABASE_URL, JWT_SECRET e SERVICE_BOOTSTRAP_KEY."
+            echo "::error::Cadastre DATABASE_URL, JWT_SECRET e SERVICE_BOOTSTRAP_KEY."
             exit 1
           fi
 
-          # Cloud SQL: sem --set-cloudsql-instances o redeploy do Actions
-          # perde o socket /cloudsql/... e o Nest trava no Prisma antes do PORT.
           CLOUD_SQL_CONNECTION="${CLOUD_SQL_CONNECTION_NAME:-}"
           if [ -z "${CLOUD_SQL_CONNECTION}" ]; then
-            echo "::error::CLOUD_SQL_CONNECTION_NAME vazio."
-            echo "::error::Crie como Repository variable (não Environment):"
-            echo "::error::Settings → Secrets and variables → Actions → Variables → New repository variable"
-            echo "::error::Name: CLOUD_SQL_CONNECTION_NAME"
-            echo "::error::Value: iluma-504019:southamerica-east1:root"
+            echo "::error::CLOUD_SQL_CONNECTION_NAME vazio (ex.: iluma-504019:southamerica-east1:root)."
             exit 1
           fi
-          echo "Cloud SQL instance: ${CLOUD_SQL_CONNECTION}"
+
           usable_redis() {
             local url="${1:-}"
             [ -n "${url}" ] || return 1
@@ -204,8 +210,7 @@ jobs:
             echo "::warning::DEEP_REDIS_URL ignorada (host privado Railway)."
           fi
 
-          # JSON é aceito por --env-vars-file e preserva URLs/senhas sem problemas
-          # de escaping. Não imprimir este arquivo: ele contém credenciais.
+          # Não imprimir este arquivo: contém credenciais.
           jq -n \
             --arg databaseUrl "${DATABASE_URL}" \
             --arg jwtSecret "${JWT_SECRET}" \
@@ -214,7 +219,7 @@ jobs:
             --arg redisUrl "${REDIS_FOR_RUN}" \
             --arg deepRedisUrl "${DEEP_REDIS_FOR_RUN}" \
             '{
-              NODE_ENV: "development",
+              NODE_ENV: "production",
               DATABASE_URL: $databaseUrl,
               JWT_SECRET: $jwtSecret,
               JWT_ISSUER: "meet-backend",
@@ -246,35 +251,31 @@ jobs:
               DEEP_RESULTS_STREAM_KEY: "deep:text_results",
               PLAYBOOKS_ENABLED: "true",
               GRPC_TLS_TERMINATED_AT_EDGE: "true",
-              GRPC_FEEDBACK_PORT: "50052"
+              GRPC_FEEDBACK_PORT: "50052",
+              PORT: "3001"
             }
             + (if $platformToken != "" then {PLATFORM_ADMIN_API_TOKEN: $platformToken} else {} end)
             + (if $redisUrl != "" then {REDIS_URL: $redisUrl} else {} end)
             + (if $deepRedisUrl != "" then {DEEP_REDIS_URL: $deepRedisUrl} else {} end)' \
-            > cloud-run-env.json
+            > nest-env.json
 
-          # Desvincula envs que eram Secret Manager na revisão antiga, para o
-          # --env-vars-file poder aplicá-las como variáveis normais (GitHub Secrets).
-          gcloud run deploy "${{ env.SERVICE_NAME }}" \
-            --project="${{ env.PROJECT_ID }}" \
-            --image="${IMAGE_SHA}" \
-            --region="${{ env.REGION }}" \
-            --platform=managed \
-            --allow-unauthenticated \
-            --port=8080 \
-            --min-instances=1 \
-            --max-instances=1 \
-            --timeout=3600 \
-            --cpu=2 \
-            --memory=1Gi \
-            --cpu-boost \
-            --set-cloudsql-instances="${CLOUD_SQL_CONNECTION}" \
-            --remove-secrets=DATABASE_URL,JWT_PRIVATE_KEY,JWT_PUBLIC_KEY,JWT_SECRET,SERVICE_BOOTSTRAP_KEY \
-            --env-vars-file=cloud-run-env.json
+          python3 deploy/gcp/render-backend-service.py \
+            --template deploy/gcp/backend.service.yaml \
+            --env-json nest-env.json \
+            --nest-image "${BACKEND_IMAGE}" \
+            --envoy-image "${ENVOY_IMAGE}" \
+            --cloud-sql "${CLOUD_SQL_CONNECTION}" \
+            --sa-email "${CLOUD_RUN_SA_EMAIL}" \
+            --region "${REGION}" \
+            --out backend.service.rendered.yaml
 
-          rm -f cloud-run-env.json
+          gcloud run services replace backend.service.rendered.yaml \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}"
 
-          gcloud run services describe "${{ env.SERVICE_NAME }}" \
-            --project="${{ env.PROJECT_ID }}" \
-            --region="${{ env.REGION }}" \
+          rm -f nest-env.json backend.service.rendered.yaml
+
+          gcloud run services describe "${SERVICE_NAME}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
             --format='value(status.url)'
