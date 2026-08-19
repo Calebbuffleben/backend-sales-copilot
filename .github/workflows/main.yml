@@ -162,6 +162,8 @@ jobs:
           ENVOY_IMAGE: ${{ needs.build-and-push.outputs.envoy_image }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_PRIVATE_KEY: ${{ secrets.JWT_PRIVATE_KEY }}
+          JWT_PUBLIC_KEY: ${{ secrets.JWT_PUBLIC_KEY }}
           SERVICE_BOOTSTRAP_KEY: ${{ secrets.SERVICE_BOOTSTRAP_KEY }}
           PLATFORM_ADMIN_API_TOKEN: ${{ secrets.PLATFORM_ADMIN_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
@@ -180,8 +182,20 @@ jobs:
           echo "Nest image:  ${BACKEND_IMAGE}"
           echo "Envoy image: ${ENVOY_IMAGE}"
 
-          if [ -z "${DATABASE_URL}" ] || [ -z "${JWT_SECRET}" ] || [ -z "${SERVICE_BOOTSTRAP_KEY}" ]; then
-            echo "::error::Cadastre DATABASE_URL, JWT_SECRET e SERVICE_BOOTSTRAP_KEY."
+          if [ -z "${DATABASE_URL}" ] || [ -z "${SERVICE_BOOTSTRAP_KEY}" ]; then
+            echo "::error::Cadastre DATABASE_URL e SERVICE_BOOTSTRAP_KEY."
+            exit 1
+          fi
+
+          # Nest: RS256 (JWT_PRIVATE_KEY+JWT_PUBLIC_KEY) em production;
+          # HS256 (JWT_SECRET) só com NODE_ENV !== production.
+          if [ -n "${JWT_PRIVATE_KEY}" ] && [ -n "${JWT_PUBLIC_KEY}" ]; then
+            NODE_ENV_VALUE="production"
+          elif [ -n "${JWT_SECRET}" ]; then
+            NODE_ENV_VALUE="development"
+            echo "::warning::Sem JWT_PRIVATE_KEY/JWT_PUBLIC_KEY — NODE_ENV=development (HS256). Cadastre as keys RS256 para production."
+          else
+            echo "::error::Cadastre JWT_PRIVATE_KEY+JWT_PUBLIC_KEY (RS256) ou JWT_SECRET (HS256)."
             exit 1
           fi
 
@@ -211,17 +225,26 @@ jobs:
           fi
 
           # Não imprimir este arquivo: contém credenciais.
+          # PEM keys: GitHub secrets often store literal \n — expand to real newlines for Nest.
+          expand_pem() {
+            printf '%s' "${1:-}" | sed 's/\\n/\n/g'
+          }
+          JWT_PRIVATE_EXPANDED="$(expand_pem "${JWT_PRIVATE_KEY}")"
+          JWT_PUBLIC_EXPANDED="$(expand_pem "${JWT_PUBLIC_KEY}")"
+
           jq -n \
+            --arg nodeEnv "${NODE_ENV_VALUE}" \
             --arg databaseUrl "${DATABASE_URL}" \
             --arg jwtSecret "${JWT_SECRET}" \
+            --arg jwtPrivate "${JWT_PRIVATE_EXPANDED}" \
+            --arg jwtPublic "${JWT_PUBLIC_EXPANDED}" \
             --arg bootstrapKey "${SERVICE_BOOTSTRAP_KEY}" \
             --arg platformToken "${PLATFORM_ADMIN_API_TOKEN}" \
             --arg redisUrl "${REDIS_FOR_RUN}" \
             --arg deepRedisUrl "${DEEP_REDIS_FOR_RUN}" \
             '{
-              NODE_ENV: "production",
+              NODE_ENV: $nodeEnv,
               DATABASE_URL: $databaseUrl,
-              JWT_SECRET: $jwtSecret,
               JWT_ISSUER: "meet-backend",
               JWT_AUDIENCE: "meet-platform",
               JWT_ACCESS_TTL_SECONDS: "900",
@@ -254,6 +277,11 @@ jobs:
               GRPC_FEEDBACK_PORT: "50052",
               PORT: "3001"
             }
+            + (if $jwtPrivate != "" and $jwtPublic != "" then
+                {JWT_PRIVATE_KEY: $jwtPrivate, JWT_PUBLIC_KEY: $jwtPublic}
+              elif $jwtSecret != "" then
+                {JWT_SECRET: $jwtSecret}
+              else {} end)
             + (if $platformToken != "" then {PLATFORM_ADMIN_API_TOKEN: $platformToken} else {} end)
             + (if $redisUrl != "" then {REDIS_URL: $redisUrl} else {} end)
             + (if $deepRedisUrl != "" then {DEEP_REDIS_URL: $deepRedisUrl} else {} end)' \
