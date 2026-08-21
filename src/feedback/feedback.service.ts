@@ -115,15 +115,14 @@ export class FeedbackService {
       const tBroadcastEndMs = Date.now();
       const broadcastMs = tBroadcastEndMs - tBroadcastStartMs;
       const windowEndToBroadcastEmitMs = tBroadcastEndMs - windowEndMs;
-      const detectorEventId = existingMeta['eventId'];
+      const eventId = existing.id;
       logFeedbackTrace('backend.emit', {
         traceId,
         meetingId: existing.meetingId,
         participantId: existing.participantId,
         windowEndMs,
         feedbackType: existing.type,
-        eventId:
-          typeof detectorEventId === 'string' ? detectorEventId : existing.id,
+        eventId,
         feedbackEmitId: existing.id,
         windowEndToBroadcastEmitMs,
         broadcastMs,
@@ -165,15 +164,14 @@ export class FeedbackService {
     const tBroadcastEndMs = Date.now();
     const broadcastMs = tBroadcastEndMs - tBroadcastStartMs;
     const windowEndToBroadcastEmitMs = tBroadcastEndMs - windowEndMs;
-    const detectorEventId = payloadMeta['eventId'];
+    const eventId = feedbackId;
     logFeedbackTrace('backend.emit', {
-      traceId,
-      meetingId: payload.meetingId,
-      participantId: payload.participantId,
-      windowEndMs,
-      feedbackType: payload.type,
-      eventId:
-        typeof detectorEventId === 'string' ? detectorEventId : feedbackId,
+        traceId,
+        meetingId: payload.meetingId,
+        participantId: payload.participantId,
+        windowEndMs,
+        feedbackType: payload.type,
+        eventId,
       feedbackEmitId: feedbackId,
       windowEndToBroadcastEmitMs,
       broadcastMs,

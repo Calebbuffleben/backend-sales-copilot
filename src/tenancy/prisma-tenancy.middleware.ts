@@ -24,6 +24,7 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   'Subscription',
   'SellerRoom',
   'PlaybookTemplate',
+  'UserSpecialistPreference',
 ]);
 
 const WHERE_OPS = new Set<string>([
