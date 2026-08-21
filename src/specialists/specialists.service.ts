@@ -317,9 +317,9 @@ export class SpecialistsService {
 
   registerBuiltins(items: RegisterBuiltinSpecialistDto[]) {
     return this.tenantCtx.runWithTenantBypass(async () => {
-      const upserted = [];
+      let upserted = 0;
       for (const item of items) {
-        const row = await this.prisma.specialistTemplate.upsert({
+        await this.prisma.specialistTemplate.upsert({
           where: { key: item.key },
           create: {
             key: item.key,
@@ -350,9 +350,9 @@ export class SpecialistsService {
             status: SpecialistStatus.PUBLISHED,
           },
         });
-        upserted.push(row);
+        upserted += 1;
       }
-      return { upserted: upserted.length };
+      return { upserted };
     });
   }
 
