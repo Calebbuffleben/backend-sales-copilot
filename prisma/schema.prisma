@@ -75,6 +75,7 @@ model Tenant {
   auditLogs         AuditLog[]
   playbookTemplates PlaybookTemplate[]
   sellerRooms       SellerRoom[]
+  specialistPreferences UserSpecialistPreference[]
 }
 
 model User {
@@ -94,6 +95,7 @@ model User {
   sellerRoomMemberships    SellerRoomMember[]
   sellerRoomInvitesSent    SellerRoomInvitation[]  @relation("SellerRoomInvitationInvitedBy")
   sellerRoomInvitesReceived SellerRoomInvitation[] @relation("SellerRoomInvitationInvitee")
+  specialistPreferences    UserSpecialistPreference[]
 }
 
 model Membership {
@@ -289,40 +291,6 @@ enum FeedbackSeverity {
 }
 
 enum FeedbackType {
-  volume_baixo
-  volume_alto
-  silencio_prolongado
-  tendencia_emocional_negativa
-  engajamento_baixo
-  overlap_fala
-  monologo_prolongado
-  frustracao_crescente
-  entusiasmo_alto
-  monotonia_prosodica
-  energia_grupo_baixa
-  interrupcoes_frequentes
-  polarizacao_emocional
-  efeito_pos_interrupcao
-  ritmo_acelerado
-  ritmo_pausado
-  // A2E2 (emoções/estados primários)
-  hostilidade
-  tedio
-  confusao
-  serenidade
-  conexao
-  tristeza
-  estado_mental
-  // Feedbacks de vendas (semântica)
-  sales_price_window_open
-  sales_decision_signal
-  sales_ready_to_close
-  sales_objection_escalating
-  sales_conversation_stalling
-  sales_category_transition
-  sales_client_indecision
-  sales_solution_understood
-  conversation_dominance
   llm_insight
 }
 
@@ -428,4 +396,71 @@ model SellerRoomInvitation {
 
   @@index([sellerRoomId, status])
   @@index([inviteeId, status])
+}
+
+enum SpecialistStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SpecialistSource {
+  CODE
+  CUSTOM
+}
+
+/// Global coaching specialist (platform-admin). Code builtins upsert via Python.
+model SpecialistTemplate {
+  id              String            @id @default(uuid())
+  key             String            @unique
+  name            String
+  description     String            @default("")
+  instructions    String            @default("")
+  tone            String            @default("")
+  exampleMessage  String            @default("")
+  triggerPhases   String[]          @default([])
+  triggerKeywords String[]          @default([])
+  minConfidence   Float             @default(0.6)
+  cooldownSec     Int               @default(15)
+  priority        Int               @default(100)
+  model           String            @default("gemini-2.5-flash")
+  maxLatencyMs    Int               @default(4000)
+  status          SpecialistStatus  @default(DRAFT)
+  enabled         Boolean           @default(true)
+  source          SpecialistSource  @default(CUSTOM)
+  icon            String?
+  color           String?
+  lastDryRunAt    DateTime?
+  publishedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  versions        SpecialistVersion[]
+
+  @@index([status, enabled])
+  @@index([source])
+}
+
+model SpecialistVersion {
+  id           String             @id @default(uuid())
+  specialistId String
+  specialist   SpecialistTemplate @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+  version      Int
+  snapshot     Json
+  createdAt    DateTime           @default(now())
+
+  @@unique([specialistId, version])
+  @@index([specialistId])
+}
+
+model UserSpecialistPreference {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  specialistKeys  String[]
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
 }

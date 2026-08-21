@@ -2,7 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { EgressAudioGateway } from './egress/egress-audio.gateway';
 import { FeedbackGrpcServer } from './feedback/feedback.grpc.server';
 import { RedisIoAdapter } from './redis-io.adapter';
 import * as dotenv from 'dotenv';
@@ -10,26 +9,6 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'path';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import dns from 'dns/promises';
-
-function parseGrpcAudioHostname(): string | null {
-  const raw = process.env.GRPC_AUDIO_SERVICE_URL?.trim();
-  if (!raw) {
-    return null;
-  }
-  if (/^https?:\/\//i.test(raw)) {
-    try {
-      return new URL(raw).hostname;
-    } catch {
-      return null;
-    }
-  }
-  const lastColon = raw.lastIndexOf(':');
-  if (lastColon > 0) {
-    return raw.slice(0, lastColon);
-  }
-  return raw;
-}
 
 function parseCorsOrigins(): string[] | boolean {
   const raw = process.env.CORS_ORIGINS?.trim();
@@ -139,10 +118,7 @@ async function bootstrap() {
   });
 
   const port = Number(process.env.PORT ?? 8080);
-  const httpServer = await app.listen(port, '0.0.0.0');
-
-  const egressGateway = app.get(EgressAudioGateway);
-  egressGateway.setHttpServer(httpServer);
+  await app.listen(port, '0.0.0.0');
 
   const feedbackGrpcServer = app.get(FeedbackGrpcServer);
   const feedbackGrpcPort = Number(process.env.GRPC_FEEDBACK_PORT ?? '50052');
@@ -189,26 +165,10 @@ async function bootstrap() {
   });
 
   console.log(
-    '[bootstrap] ready | PORT=%s | GRPC_FEEDBACK_INGRESS=0.0.0.0:%s | GRPC_AUDIO_SERVICE_URL=%s | GRPC_AUDIO_USE_TLS=%s',
+    '[bootstrap] ready | PORT=%s | GRPC_FEEDBACK_INGRESS=0.0.0.0:%s',
     port,
     feedbackGrpcPort,
-    process.env.GRPC_AUDIO_SERVICE_URL || '(default from GrpcAudioClient)',
-    process.env.GRPC_AUDIO_USE_TLS ?? '(infer)',
   );
-
-  const grpcHost = parseGrpcAudioHostname();
-  if (grpcHost && grpcHost !== 'localhost' && grpcHost !== '127.0.0.1') {
-    try {
-      const { address } = await dns.lookup(grpcHost);
-      console.log(`[bootstrap] GRPC_AUDIO DNS OK | ${grpcHost} → ${address}`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error(
-        `[bootstrap] GRPC_AUDIO DNS FAILED | host=${grpcHost} | ${msg}`,
-        '\n[bootstrap] Fix: set GRPC_AUDIO_SERVICE_URL to a resolvable host:port for the Python audio gRPC (private mesh / Cloud Run). Hot path desktop uses WSS direct to Python and does not need this.',
-      );
-    }
-  }
 }
 bootstrap().catch((err) => {
   console.error('[bootstrap] fatal', err);

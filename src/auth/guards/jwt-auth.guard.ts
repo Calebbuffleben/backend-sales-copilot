@@ -23,7 +23,7 @@ import type { TenantContext } from '../../tenancy/tenant-context.types';
  *
  * NOTE: Socket.IO, WS (`/egress-audio`) and gRPC do NOT use this guard —
  * they each validate their own credentials and pass context explicitly
- * (see `FeedbackGateway`, `EgressAudioGateway`, `FeedbackGrpcServer`).
+ * (see `FeedbackGateway`, `FeedbackGrpcServer`).
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {

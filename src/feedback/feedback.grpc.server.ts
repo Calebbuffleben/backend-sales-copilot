@@ -55,6 +55,7 @@ export class FeedbackGrpcServer {
   getImplementation() {
     return {
       PublishFeedback: this.publishFeedback.bind(this),
+      ReportSessionLifecycle: this.reportSessionLifecycle.bind(this),
     };
   }
 
@@ -257,6 +258,67 @@ export class FeedbackGrpcServer {
       );
       callback({
         name: 'FeedbackPublishError',
+        message,
+        code,
+      } as grpc.ServiceError);
+    }
+  }
+
+  private async reportSessionLifecycle(
+    call: AuthenticatedCall<{
+      tenant_id?: string;
+      meeting_id?: string;
+      user_id?: string;
+      participant_id?: string;
+      participant_role?: string;
+      track?: string;
+      sample_rate?: number;
+      channels?: number;
+      event?: string;
+      duration_ms?: number | string;
+      chunks_received?: number;
+    }>,
+    callback: UnaryCallback<{ accepted: boolean }>,
+  ): Promise<void> {
+    try {
+      const { ctx } = await this.authenticate(call.metadata);
+      const event = String(call.request.event || '').toLowerCase();
+      const meetingId = String(call.request.meeting_id || '').trim();
+      const participantId = String(call.request.participant_id || ctx.userId);
+      if (!meetingId) {
+        throw Object.assign(new Error('meeting_id is required'), {
+          code: grpc.status.INVALID_ARGUMENT,
+        });
+      }
+      if (event === 'open') {
+        await this.sessions.markConnectionOpen({
+          tenantId: ctx.tenantId,
+          meetingId,
+          userId: String(call.request.user_id || ctx.userId),
+          participantId,
+          participantRole: String(call.request.participant_role || ''),
+          track: String(call.request.track || ''),
+          sampleRate: Number(call.request.sample_rate || 16000),
+          channels: Number(call.request.channels || 1),
+        });
+      } else if (event === 'close') {
+        await this.sessions.markConnectionClosed({
+          tenantId: ctx.tenantId,
+          meetingId,
+          userId: String(call.request.user_id || ctx.userId),
+          participantId,
+          durationMs: Number(call.request.duration_ms || 0),
+          chunksReceived: Number(call.request.chunks_received || 0),
+          bytesReceived: 0,
+        });
+      }
+      callback(null, { accepted: true });
+    } catch (error) {
+      const code = (error as { code?: number }).code ?? grpc.status.INTERNAL;
+      const message =
+        error instanceof Error ? error.message : 'Unknown lifecycle error';
+      callback({
+        name: 'SessionLifecycleError',
         message,
         code,
       } as grpc.ServiceError);
