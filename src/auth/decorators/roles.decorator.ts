@@ -13,3 +13,9 @@ export const Roles = (...roles: TokenRole[]) => SetMetadata(ROLES_KEY, roles);
  * of this decorator via the JwtAuthGuard's `access`-only policy.
  */
 export const AdminOnly = () => Roles('OWNER', 'ADMIN');
+
+/**
+ * Live Floor / War Room / whisper. MANAGER cannot manage members,
+ * invites, playbooks, or billing — those stay {@link AdminOnly}.
+ */
+export const ManagerAccess = () => Roles('OWNER', 'ADMIN', 'MANAGER');

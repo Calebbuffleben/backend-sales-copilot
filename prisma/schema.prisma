@@ -36,6 +36,7 @@ enum TenantStatus {
 enum MembershipRole {
   OWNER
   ADMIN
+  MANAGER
   MEMBER
 }
 
@@ -76,6 +77,7 @@ model Tenant {
   playbookTemplates PlaybookTemplate[]
   sellerRooms       SellerRoom[]
   specialistPreferences UserSpecialistPreference[]
+  monitorAlerts         MonitorAlert[]
 }
 
 model User {
@@ -96,6 +98,8 @@ model User {
   sellerRoomInvitesSent    SellerRoomInvitation[]  @relation("SellerRoomInvitationInvitedBy")
   sellerRoomInvitesReceived SellerRoomInvitation[] @relation("SellerRoomInvitationInvitee")
   specialistPreferences    UserSpecialistPreference[]
+  sessions                 Session[]
+  monitorAlertsAcked       MonitorAlert[]             @relation("MonitorAlertAcknowledgedBy")
 }
 
 model Membership {
@@ -267,11 +271,14 @@ model Session {
   activeConnections Int           @default(0)
   audioSeconds      Int           @default(0)
   metadata          Json?
+  userId            String?
+  user              User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, meetingId])
   @@index([roomName])
   @@index([tenantId])
   @@index([tenantId, status, lastSeenAt])
+  @@index([userId])
 }
 
 model OperationalEvent {
@@ -323,6 +330,30 @@ enum FeedbackSeverity {
 
 enum FeedbackType {
   llm_insight
+  manager_whisper
+}
+
+enum MonitorAlertKind {
+  red
+  yellow
+  sos
+}
+
+model MonitorAlert {
+  id             String           @id @default(uuid())
+  tenantId       String
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId      String
+  kind           MonitorAlertKind
+  message        String
+  metadata       Json?
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  acknowledgedByUser User?        @relation("MonitorAlertAcknowledgedBy", fields: [acknowledgedBy], references: [id], onDelete: SetNull)
+  createdAt      DateTime         @default(now())
+
+  @@index([tenantId, meetingId, createdAt])
+  @@index([tenantId, acknowledgedAt])
 }
 
 model FeedbackEvent {

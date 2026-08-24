@@ -15,6 +15,7 @@ import { SpecialistsModule } from './specialists/specialists.module';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module';
 import { OpsModule } from './ops/ops.module';
 import { SellerRoomsModule } from './seller-rooms/seller-rooms.module';
+import { MonitorModule } from './monitor/monitor.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { SellerRoomsModule } from './seller-rooms/seller-rooms.module';
     PlaybooksModule,
     SpecialistsModule,
     SellerRoomsModule,
+    MonitorModule,
     PlatformAdminModule,
     OpsModule,
     FeedbackModule,
