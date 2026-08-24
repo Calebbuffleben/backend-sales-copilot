@@ -8,6 +8,7 @@ import { Plan, SubscriptionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
+import { entitlementEnforced, isEntitled } from './entitlement';
 import { planToMaxUsers } from './plan-limits';
 
 interface RequestMeta {
@@ -22,6 +23,9 @@ export interface SubscriptionSnapshot {
   memberCount: number;
   pendingInvites: number;
   seatsRemaining: number;
+  entitled: boolean;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: Date | null;
   updatedAt: Date;
 }
 
@@ -60,15 +64,7 @@ export class BillingService {
       }),
     ]);
 
-    return {
-      plan: sub.plan,
-      maxUsers: sub.maxUsers,
-      status: sub.status,
-      memberCount,
-      pendingInvites,
-      seatsRemaining: Math.max(0, sub.maxUsers - memberCount),
-      updatedAt: sub.updatedAt,
-    };
+    return toSnapshot(sub, memberCount, pendingInvites);
   }
 
   /**
@@ -136,15 +132,33 @@ export class BillingService {
         where: { tenantId, status: 'PENDING' },
       });
 
-      return {
-        plan: updated.plan,
-        maxUsers: updated.maxUsers,
-        status: updated.status,
-        memberCount,
-        pendingInvites,
-        seatsRemaining: Math.max(0, updated.maxUsers - memberCount),
-        updatedAt: updated.updatedAt,
-      };
+      return toSnapshot(updated, memberCount, pendingInvites);
     });
   }
+}
+
+function toSnapshot(
+  sub: {
+    plan: Plan;
+    maxUsers: number;
+    status: SubscriptionStatus;
+    cancelAtPeriodEnd?: boolean;
+    currentPeriodEnd?: Date | null;
+    updatedAt: Date;
+  },
+  memberCount: number,
+  pendingInvites: number,
+): SubscriptionSnapshot {
+  return {
+    plan: sub.plan,
+    maxUsers: sub.maxUsers,
+    status: sub.status,
+    memberCount,
+    pendingInvites,
+    seatsRemaining: Math.max(0, sub.maxUsers - memberCount),
+    entitled: !entitlementEnforced() || isEntitled(sub.plan, sub.status),
+    cancelAtPeriodEnd: sub.cancelAtPeriodEnd ?? false,
+    currentPeriodEnd: sub.currentPeriodEnd ?? null,
+    updatedAt: sub.updatedAt,
+  };
 }

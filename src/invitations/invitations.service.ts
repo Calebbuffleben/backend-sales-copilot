@@ -23,6 +23,7 @@ import { ARGON2_OPTIONS } from '../auth/auth.constants';
 import { AuthService } from '../auth/auth.service';
 import type { AuthSession } from '../auth/auth.service';
 import { planToMaxUsers } from '../billing/plan-limits';
+import { denyIfNotEntitled } from '../billing/entitlement';
 
 interface RequestMeta {
   ip?: string;
@@ -401,6 +402,7 @@ export class InvitationsService {
       const sub = await this.prisma.subscription.findUnique({
         where: { tenantId: invite.tenantId },
       });
+      denyIfNotEntitled(sub?.plan, sub?.status);
       // Re-check the seat limit at accept-time (admin may have downgraded,
       // or someone else accepted in parallel).
       const memberCount = await this.prisma.membership.count({

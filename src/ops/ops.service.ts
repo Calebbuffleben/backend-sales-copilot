@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { Plan } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
+import { PLAN_MONTHLY_PRICE } from '../billing/plan-limits';
 
 @Injectable()
 export class OpsService {
@@ -207,6 +209,9 @@ function startOfDay(date: Date) {
 }
 
 function estimateRevenue(groups: Array<{ plan: string; _count: { _all: number } }>) {
-  const prices: Record<string, number> = { FREE: 0, PRO: 49, ENTERPRISE: 199 };
-  return groups.reduce((sum, row) => sum + (prices[row.plan] ?? 0) * row._count._all, 0);
+  return groups.reduce(
+    (sum, row) =>
+      sum + (PLAN_MONTHLY_PRICE[row.plan as Plan] ?? 0) * row._count._all,
+    0,
+  );
 }

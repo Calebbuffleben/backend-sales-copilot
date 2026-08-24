@@ -4,11 +4,12 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { TenancyModule } from '../tenancy/tenancy.module';
 import { BillingService } from './billing.service';
 import { BillingController } from './billing.controller';
+import { StripeBillingService } from './stripe-billing.service';
 
 @Module({
   imports: [PrismaModule, TenancyModule],
-  providers: [BillingService],
+  providers: [BillingService, StripeBillingService],
   controllers: [BillingController],
-  exports: [BillingService],
+  exports: [BillingService, StripeBillingService],
 })
 export class BillingModule {}

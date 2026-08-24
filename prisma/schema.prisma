@@ -144,10 +144,41 @@ model Subscription {
   plan      Plan               @default(FREE)
   maxUsers  Int                @default(3)
   status    SubscriptionStatus @default(ACTIVE)
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  stripePriceId        String?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
 
   @@index([tenantId])
+}
+
+enum PendingCheckoutStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+}
+
+// Pre-tenant checkout row. Not tenant-scoped — created before Tenant exists.
+model PendingCheckout {
+  id                      String                @id @default(uuid())
+  email                   String
+  passwordHash            String
+  name                    String?
+  tenantName              String
+  tenantSlug              String
+  plan                    Plan
+  stripeCheckoutSessionId String?               @unique
+  status                  PendingCheckoutStatus @default(PENDING)
+  tenantId                String?
+  expiresAt               DateTime
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  @@index([email, status])
+  @@index([status, createdAt])
 }
 
 model RefreshToken {

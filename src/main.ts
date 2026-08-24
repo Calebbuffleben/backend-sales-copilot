@@ -72,6 +72,7 @@ if (!process.env.DATABASE_URL) {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
+    rawBody: true,
     logger: ['error', 'warn', 'log'],
   });
 
@@ -107,7 +108,7 @@ async function bootstrap() {
   app.enableCors({
     origin: parseCorsOrigins(),
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',

@@ -273,6 +273,11 @@ export class PlatformAdminService {
       if (!tenant.subscription) {
         throw new NotFoundException('Subscription not found for tenant');
       }
+      if (tenant.subscription.stripeSubscriptionId && dto.force !== true) {
+        throw new ConflictException(
+          'Tenant é gerenciado pelo Stripe — o webhook vai sobrescrever esta edição. Use sync/cancel, ou repita com force:true.',
+        );
+      }
 
       const nextPlan = dto.plan ?? tenant.subscription.plan;
       const planMax = planToMaxUsers(nextPlan);
@@ -321,6 +326,7 @@ export class PlatformAdminService {
               status: updated.status,
               maxUsers: updated.maxUsers,
             },
+            forced: dto.force === true,
           } as unknown as Prisma.InputJsonValue,
         },
       });

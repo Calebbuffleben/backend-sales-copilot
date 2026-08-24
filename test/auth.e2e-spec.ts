@@ -49,6 +49,7 @@ describe('Multi-tenant auth + membership + billing (e2e)', () => {
     process.env.JWT_ISSUER = 'meet-backend-test';
     process.env.JWT_AUDIENCE = 'meet-platform-test';
     process.env.ALLOW_SELF_SIGNUP = 'true';
+    process.env.ALLOW_FREE_PLAN_SWITCH = 'true';
     process.env.SERVICE_BOOTSTRAP_KEY = 'test-bootstrap-key-xyz';
     process.env.AUTH_LOCKOUT_EMAIL_THRESHOLD = '3';
     process.env.AUTH_LOCKOUT_IP_THRESHOLD = '100';
