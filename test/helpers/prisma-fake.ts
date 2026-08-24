@@ -66,6 +66,11 @@ interface SubscriptionRow {
   plan: 'FREE' | 'PRO' | 'ENTERPRISE';
   maxUsers: number;
   status: 'ACTIVE' | 'CANCELED' | 'PAST_DUE';
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  stripePriceId: string | null;
+  currentPeriodEnd: Date | null;
+  cancelAtPeriodEnd: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -197,15 +202,16 @@ export function createInMemoryPrismaFake() {
   const memberships: MembershipRow[] = [];
   const invitations: InvitationRow[] = [];
   const subscriptions: SubscriptionRow[] = [];
+  const pendingCheckouts: Array<Record<string, any>> = [];
   const refreshTokens: RefreshTokenRow[] = [];
   const auditLogs: AuditLogRow[] = [];
   const feedbackEvents: FeedbackEventRow[] = [];
   const playbookTemplates: PlaybookTemplateRow[] = [];
 
   const api = {
-    async $connect() {},
-    async $disconnect() {},
-    $use(_mw: unknown) {},
+    async $transaction(fn: (tx: typeof api) => Promise<unknown>) {
+      return fn(api);
+    },
 
     // -------------------------- Tenant -------------------------------- //
     tenant: {
@@ -386,6 +392,11 @@ export function createInMemoryPrismaFake() {
           plan: data.plan ?? 'FREE',
           maxUsers: data.maxUsers ?? 3,
           status: data.status ?? 'ACTIVE',
+          stripeCustomerId: data.stripeCustomerId ?? null,
+          stripeSubscriptionId: data.stripeSubscriptionId ?? null,
+          stripePriceId: data.stripePriceId ?? null,
+          currentPeriodEnd: data.currentPeriodEnd ?? null,
+          cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -397,6 +408,37 @@ export function createInMemoryPrismaFake() {
         if (idx < 0) throw new Error('subscription not found');
         subscriptions[idx] = { ...subscriptions[idx], ...data, updatedAt: new Date() };
         return subscriptions[idx];
+      },
+    },
+
+    pendingCheckout: {
+      async findUnique({ where }: any) {
+        return pendingCheckouts.find((p) => matchWhere(p, where)) ?? null;
+      },
+      async create({ data }: any) {
+        const row = {
+          id: uid('pco_'),
+          email: data.email,
+          passwordHash: data.passwordHash,
+          name: data.name ?? null,
+          tenantName: data.tenantName,
+          tenantSlug: data.tenantSlug,
+          plan: data.plan,
+          stripeCheckoutSessionId: data.stripeCheckoutSessionId ?? null,
+          status: data.status ?? 'PENDING',
+          tenantId: data.tenantId ?? null,
+          expiresAt: data.expiresAt,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        pendingCheckouts.push(row);
+        return row;
+      },
+      async update({ where, data }: any) {
+        const idx = pendingCheckouts.findIndex((p) => matchWhere(p, where));
+        if (idx < 0) throw new Error('pendingCheckout not found');
+        pendingCheckouts[idx] = { ...pendingCheckouts[idx], ...data, updatedAt: new Date() };
+        return pendingCheckouts[idx];
       },
     },
 

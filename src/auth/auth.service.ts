@@ -24,6 +24,7 @@ import {
   DEFAULT_SERVICE_TTL_SECONDS,
 } from './auth.constants';
 import { planToMaxUsers } from '../billing/plan-limits';
+import { denyIfNotEntitled, entitlementEnforced, isEntitled } from '../billing/entitlement';
 import type { TokenRole } from './role.types';
 import {
   LoginDto,
@@ -266,6 +267,11 @@ export class AuthService {
         );
       }
 
+      const subscription = await this.prisma.subscription.findUnique({
+        where: { tenantId: tenant.id },
+      });
+      denyIfNotEntitled(subscription?.plan, subscription?.status);
+
       await this.prisma.user.update({
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
@@ -358,6 +364,11 @@ export class AuthService {
       if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
         throw new UnauthorizedException('Tenant unavailable');
       }
+
+      const refreshSub = await this.prisma.subscription.findUnique({
+        where: { tenantId: tenant.id },
+      });
+      denyIfNotEntitled(refreshSub?.plan, refreshSub?.status);
 
       // Re-verify the membership still exists (admin may have removed the user).
       const membership = await this.prisma.membership.findUnique({
@@ -468,6 +479,10 @@ export class AuthService {
       if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
         throw new UnauthorizedException('Tenant unavailable');
       }
+      const issueSub = await this.prisma.subscription.findUnique({
+        where: { tenantId: tenant.id },
+      });
+      denyIfNotEntitled(issueSub?.plan, issueSub?.status);
       const tokens = await this.issueTokens(
         {
           userId: user.id,
@@ -535,6 +550,11 @@ export class AuthService {
               memberCount,
               pendingInvites,
               seatsRemaining: Math.max(0, subscription.maxUsers - memberCount),
+              entitled:
+                !entitlementEnforced() ||
+                isEntitled(subscription.plan, subscription.status),
+              cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+              currentPeriodEnd: subscription.currentPeriodEnd,
             }
           : null,
       };

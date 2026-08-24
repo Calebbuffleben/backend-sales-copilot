@@ -6,6 +6,7 @@ import {
   TenantStatus,
 } from '@prisma/client';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsInt,
@@ -91,6 +92,11 @@ export class UpdateTenantBillingDto {
   @Min(1)
   @Max(500)
   maxUsers?: number;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  force?: boolean;
 }
 
 export class UserListQueryDto extends PlatformListQueryDto {
@@ -120,4 +126,26 @@ export class CreatePlatformInvitationDto {
   @IsOptional()
   @IsEnum(MembershipRole)
   role?: MembershipRole;
+}
+
+export class BillingListQueryDto extends PlatformListQueryDto {
+  @IsOptional()
+  @IsEnum(Plan)
+  plan?: Plan;
+
+  @IsOptional()
+  @IsEnum(SubscriptionStatus)
+  status?: SubscriptionStatus;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^(stripe|manual)$/)
+  source?: 'stripe' | 'manual';
+}
+
+export class CheckoutListQueryDto extends PlatformListQueryDto {
+  @IsOptional()
+  @IsString()
+  @Matches(/^(PENDING|COMPLETED|EXPIRED|ABANDONED)$/)
+  status?: 'PENDING' | 'COMPLETED' | 'EXPIRED' | 'ABANDONED';
 }
