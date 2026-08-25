@@ -8,8 +8,13 @@ import type { MembershipRole } from '@prisma/client';
  */
 export type TokenRole = MembershipRole | 'SERVICE';
 
-export const MEMBERSHIP_ROLES = ['OWNER', 'ADMIN', 'MEMBER'] as const;
+export const MEMBERSHIP_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'] as const;
 export const ADMIN_ROLES: readonly TokenRole[] = ['OWNER', 'ADMIN'];
+export const MANAGER_ACCESS_ROLES: readonly TokenRole[] = [
+  'OWNER',
+  'ADMIN',
+  'MANAGER',
+];
 
 /**
  * Returns `true` when the token role has administrative privileges over
@@ -24,5 +29,18 @@ export function isAdmin(role: TokenRole | undefined | null): boolean {
 }
 
 export function isMembershipRole(value: unknown): value is MembershipRole {
-  return value === 'OWNER' || value === 'ADMIN' || value === 'MEMBER';
+  return (
+    value === 'OWNER' ||
+    value === 'ADMIN' ||
+    value === 'MANAGER' ||
+    value === 'MEMBER'
+  );
+}
+
+/** Live Floor / War Room / whisper — OWNER, ADMIN, and MANAGER. */
+export function canAccessManagerFloor(
+  role: TokenRole | undefined | null,
+): boolean {
+  if (!role) return false;
+  return role === 'OWNER' || role === 'ADMIN' || role === 'MANAGER';
 }

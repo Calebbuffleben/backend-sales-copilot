@@ -39,7 +39,7 @@ interface MembershipRow {
   id: Id;
   userId: Id;
   tenantId: Id;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  role: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
   invitedBy: Id | null;
   createdAt: Date;
   updatedAt: Date;
@@ -49,7 +49,7 @@ interface InvitationRow {
   id: Id;
   tenantId: Id;
   email: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  role: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
   tokenHash: string;
   status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED';
   invitedById: Id;

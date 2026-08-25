@@ -7,9 +7,15 @@ import { forwardRef } from '@nestjs/common';
 import { LLMFeedbackModule } from '../llm-feedback/llm-feedback.module';
 import { AuthModule } from '../auth/auth.module';
 import { SessionsModule } from '../sessions/sessions.module';
+import { MonitorModule } from '../monitor/monitor.module';
 
 @Module({
-  imports: [forwardRef(() => LLMFeedbackModule), AuthModule, SessionsModule],
+  imports: [
+    forwardRef(() => LLMFeedbackModule),
+    AuthModule,
+    SessionsModule,
+    forwardRef(() => MonitorModule),
+  ],
   providers: [FeedbackGateway, FeedbackService, FeedbackGrpcServer],
   controllers: [FeedbackController],
   exports: [FeedbackService, FeedbackGrpcServer, FeedbackGateway],

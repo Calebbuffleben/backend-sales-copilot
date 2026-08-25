@@ -23,6 +23,7 @@ export class SessionsService {
   }) {
     return this.tenantCtx.runWithTenantBypass(async () => {
       const now = new Date();
+      const userId = await this.resolveSessionUserId(input.userId);
       await this.prisma.session.upsert({
         where: {
           tenantId_meetingId: {
@@ -39,6 +40,7 @@ export class SessionsService {
           lastSeenAt: now,
           activeConnections: 1,
           metadata: input as unknown as Prisma.InputJsonValue,
+          ...(userId ? { userId } : {}),
         },
         update: {
           status: 'ACTIVE',
@@ -46,6 +48,7 @@ export class SessionsService {
           lastSeenAt: now,
           activeConnections: { increment: 1 },
           metadata: input as unknown as Prisma.InputJsonValue,
+          ...(userId ? { userId } : {}),
         },
       });
       await this.recordEvent({
@@ -117,7 +120,18 @@ export class SessionsService {
         durationMs: input.durationMs,
         metadata: input,
       });
+      return { ended: nextConnections === 0 };
     });
+  }
+
+  private async resolveSessionUserId(userId: string): Promise<string | null> {
+    const id = (userId || '').trim();
+    if (!id) return null;
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    return user?.id ?? null;
   }
 
   recordEvent(input: {

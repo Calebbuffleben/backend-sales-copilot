@@ -97,7 +97,7 @@ export class InvitationsService {
     if (role === MembershipRole.OWNER) {
       // OWNER can only be assigned via registration or explicit promotion.
       throw new ForbiddenException(
-        'Cannot invite a user as OWNER — invite as ADMIN/MEMBER and promote later',
+        'Cannot invite a user as OWNER — invite as ADMIN/MANAGER/MEMBER and promote later',
       );
     }
 

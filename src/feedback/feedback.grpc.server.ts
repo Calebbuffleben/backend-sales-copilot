@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional, Inject, forwardRef } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 
 import { logFeedbackTrace, makeFeedbackTraceId } from './feedback-trace';
@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
 import { TenantStatus } from '@prisma/client';
 import { SessionsService } from '../sessions/sessions.service';
+import { MonitorService } from '../monitor/monitor.service';
 
 type UnaryCallback<T> = (error: grpc.ServiceError | null, response?: T) => void;
 
@@ -50,12 +51,16 @@ export class FeedbackGrpcServer {
     private readonly prisma: PrismaService,
     private readonly tenantCtx: TenantContextService,
     private readonly sessions: SessionsService,
+    @Optional()
+    @Inject(forwardRef(() => MonitorService))
+    private readonly monitor?: MonitorService,
   ) {}
 
   getImplementation() {
     return {
       PublishFeedback: this.publishFeedback.bind(this),
       ReportSessionLifecycle: this.reportSessionLifecycle.bind(this),
+      PublishMeetingSnapshot: this.publishMeetingSnapshot.bind(this),
     };
   }
 
@@ -302,7 +307,7 @@ export class FeedbackGrpcServer {
           channels: Number(call.request.channels || 1),
         });
       } else if (event === 'close') {
-        await this.sessions.markConnectionClosed({
+        const closed = await this.sessions.markConnectionClosed({
           tenantId: ctx.tenantId,
           meetingId,
           userId: String(call.request.user_id || ctx.userId),
@@ -311,6 +316,9 @@ export class FeedbackGrpcServer {
           chunksReceived: Number(call.request.chunks_received || 0),
           bytesReceived: 0,
         });
+        if (closed?.ended) {
+          this.monitor?.notifyMeetingEnded(ctx.tenantId, meetingId);
+        }
       }
       callback(null, { accepted: true });
     } catch (error) {
@@ -319,6 +327,52 @@ export class FeedbackGrpcServer {
         error instanceof Error ? error.message : 'Unknown lifecycle error';
       callback({
         name: 'SessionLifecycleError',
+        message,
+        code,
+      } as grpc.ServiceError);
+    }
+  }
+
+  private async publishMeetingSnapshot(
+    call: AuthenticatedCall<{
+      tenant_id?: string;
+      meeting_id?: string;
+      health_score?: number;
+      talk_listen_json?: string;
+      objections_json?: string;
+      playbook_adherence_json?: string;
+      sentiment_trend_json?: string;
+      alerts_json?: string;
+      ts_ms?: number | string;
+    }>,
+    callback: UnaryCallback<{ accepted: boolean }>,
+  ): Promise<void> {
+    try {
+      const { ctx } = await this.authenticate(call.metadata);
+      if (!this.monitor) {
+        callback(null, { accepted: false });
+        return;
+      }
+      await this.monitor.ingestSnapshot({
+        tenant_id: ctx.tenantId,
+        meeting_id: String(call.request.meeting_id || ''),
+        health_score: Number(call.request.health_score ?? 50),
+        talk_listen_json: String(call.request.talk_listen_json || ''),
+        objections_json: String(call.request.objections_json || ''),
+        playbook_adherence_json: String(
+          call.request.playbook_adherence_json || '',
+        ),
+        sentiment_trend_json: String(call.request.sentiment_trend_json || ''),
+        alerts_json: String(call.request.alerts_json || ''),
+        ts_ms: call.request.ts_ms,
+      });
+      callback(null, { accepted: true });
+    } catch (error) {
+      const code = (error as { code?: number }).code ?? grpc.status.INTERNAL;
+      const message =
+        error instanceof Error ? error.message : 'Unknown snapshot error';
+      callback({
+        name: 'MeetingSnapshotError',
         message,
         code,
       } as grpc.ServiceError);
