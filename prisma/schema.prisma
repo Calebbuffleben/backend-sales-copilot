@@ -75,6 +75,8 @@ model Tenant {
   auditLogs         AuditLog[]
   playbookTemplates PlaybookTemplate[]
   sellerRooms       SellerRoom[]
+  transcriptTurns   TranscriptTurn[]
+  meetingRecaps     MeetingRecap[]
 }
 
 model User {
@@ -239,6 +241,42 @@ model Session {
   @@index([roomName])
   @@index([tenantId])
   @@index([tenantId, status, lastSeenAt])
+}
+
+model TranscriptTurn {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId  String
+  turnId     String
+  speaker    String
+  textEn     String
+  textPt     String
+  summaryPt  String   @default("")
+  seq        Int
+  startedAt  DateTime
+  endedAt    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, meetingId, turnId])
+  @@index([tenantId, meetingId, seq])
+}
+
+model MeetingRecap {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingId   String
+  summary     String
+  decisions   Json
+  highlights  Json
+  actionItems Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, meetingId])
+  @@index([tenantId])
 }
 
 model OperationalEvent {

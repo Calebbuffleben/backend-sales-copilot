@@ -17,6 +17,7 @@ import { PlaybooksModule } from './playbooks/playbooks.module';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module';
 import { OpsModule } from './ops/ops.module';
 import { SellerRoomsModule } from './seller-rooms/seller-rooms.module';
+import { AssistantModule } from './assistant/assistant.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { SellerRoomsModule } from './seller-rooms/seller-rooms.module';
     PlatformAdminModule,
     OpsModule,
     FeedbackModule,
+    AssistantModule,
     EgressModule,
     PipelineModule,
     LLMFeedbackModule,
